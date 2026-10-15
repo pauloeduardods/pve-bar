@@ -1,0 +1,19 @@
+[package]
+name = "pve-core"
+description = "Pure logic for pve-bar: Proxmox resources, rounding, diffs, backoff, config (no I/O)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "hot_path"
+harness = false
+
+[lints]
+workspace = true
