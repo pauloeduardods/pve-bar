@@ -1,0 +1,19 @@
+[package]
+name = "pvectl"
+description = "pve-bar command line: status, doctor and setup"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pve-core.workspace = true
+pve-sys.workspace = true
+futures-util = { version = "0.3", default-features = false }
+serde_json.workspace = true
+tokio.workspace = true
+zbus.workspace = true
+
+[lints]
+workspace = true
