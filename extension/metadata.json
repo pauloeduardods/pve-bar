@@ -1,0 +1,14 @@
+{
+  "uuid": "pve-bar@paulo",
+  "name": "pve-bar",
+  "description": "CPU, RAM and temperature of a Proxmox VE server, and its VMs and containers, in the top bar. Requires the pved service from the project repository.",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ],
+  "settings-schema": "org.gnome.shell.extensions.pve-bar",
+  "version-name": "0.1.0"
+}

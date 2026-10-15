@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.pve-bar" path="/org/gnome/shell/extensions/pve-bar/">
+
+    <!-- Which server and node the panel shows ('' = automatic) -->
+    <key name="server" type="s"><default>''</default><summary>Server name ('' = the first one)</summary></key>
+    <key name="node" type="s"><default>''</default><summary>Node name ('' = the first online node of the server)</summary></key>
+
+    <key name="show-icons" type="b"><default>true</default><summary>Show icons</summary></key>
+
+    <!-- Placement -->
+    <key name="panel-position" type="s">
+      <choices><choice value="left"/><choice value="center"/><choice value="right"/></choices>
+      <default>'right'</default>
+      <summary>Position in the top bar</summary>
+    </key>
+    <key name="panel-index" type="i"><range min="0" max="20"/><default>0</default><summary>Order within the area</summary></key>
+
+    <!-- Thresholds -->
+    <key name="cpu-warm" type="i"><range min="1" max="110"/><default>70</default><summary>CPU %: warm from</summary></key>
+    <key name="cpu-hot" type="i"><range min="1" max="110"/><default>90</default><summary>CPU %: hot from</summary></key>
+    <key name="mem-warm" type="i"><range min="1" max="110"/><default>80</default><summary>RAM %: warm from</summary></key>
+    <key name="mem-hot" type="i"><range min="1" max="110"/><default>95</default><summary>RAM %: hot from</summary></key>
+    <key name="temp-warm" type="i"><range min="30" max="110"/><default>70</default><summary>Temperature (°C): warm from</summary></key>
+    <key name="temp-hot" type="i"><range min="30" max="110"/><default>85</default><summary>Temperature (°C): hot from</summary></key>
+
+    <!-- Colours (any CSS colour; empty = theme colour) -->
+    <key name="color-normal" type="s"><default>''</default><summary>Normal color</summary></key>
+    <key name="color-warm" type="s"><default>'#f8e45c'</default><summary>Warm color</summary></key>
+    <key name="color-hot" type="s"><default>'#f66151'</default><summary>Hot color</summary></key>
+  </schema>
+</schemalist>

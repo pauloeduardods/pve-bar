@@ -1,0 +1,12 @@
+{
+  "name": "pve-bar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GNOME Shell extension: CPU, RAM and temperature of a Proxmox VE server in the top bar",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test tests/model.test.js tests/install.test.js && node --import ./tests/gi-stubs/register.mjs --test tests/client.test.js",
+    "check": "for f in $(find extension -name '*.js'); do node --check \"$f\" || exit 1; done && { [ ! -f install.sh ] || bash -n install.sh; } && echo syntax ok"
+  }
+}

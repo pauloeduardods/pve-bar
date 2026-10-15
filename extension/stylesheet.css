@@ -1,0 +1,56 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+.pve-bar-panel-box {
+    spacing: 10px;
+}
+
+.pve-bar-segment {
+    spacing: 3px;
+}
+
+.pve-bar-icon {
+    icon-size: 14px;
+}
+
+.pve-bar-menu-value {
+    font-weight: bold;
+}
+
+.pve-bar-menu-dim {
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.pve-bar-guest-dot {
+    min-width: 14px;
+}
+
+.pve-bar-dot-running {
+    color: #57e389;
+}
+
+.pve-bar-dot-stopped {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.pve-bar-dot-paused {
+    color: #f8e45c;
+}
+
+.pve-bar-dot-unknown {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.pve-bar-guest-badge {
+    font-size: 80%;
+    padding: 0 4px;
+    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.pve-bar-guest-usage {
+    min-width: 90px;
+    text-align: right;
+}
+
+.pve-bar-server-name {
+    font-weight: bold;
+}
