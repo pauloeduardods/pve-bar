@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pve-core",
+    "crates/pve-sys",
+    "crates/pved",
+    "crates/pvectl",
+    "crates/pve-temp-agent",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/pauloeduardods/pve-bar"
+
+[workspace.dependencies]
+pve-core = { path = "crates/pve-core" }
+pve-sys = { path = "crates/pve-sys" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "time", "macros", "net", "signal", "sync"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+opt-level = "s"
