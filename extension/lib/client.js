@@ -67,6 +67,8 @@ export class PveClient {
         this._proxy = null;
         this._signalIds = [];
         this._values = new Map();
+        // Keys an Updated touched while GetValues was in flight: newer than its reply.
+        this._fresh = null;
         this._generation = 0;
         this._cancellable = new Gio.Cancellable();
         this._watchId = Gio.bus_watch_name(
@@ -115,10 +117,18 @@ export class PveClient {
                 }));
             this._setDaemon('running');
 
+            this._fresh = new Set();
             const reply = await this._getValues(proxy);
             if (generation !== this._generation)
                 return; // a stale reply must not overwrite a newer session
-            this._values = new Map(Object.entries(dictFrom(reply)));
+            // pved may answer before its first poll (empty) while an Updated
+            // with everything races it: never let the reply undo an Updated.
+            const fresh = this._fresh;
+            this._fresh = null;
+            for (const [key, value] of Object.entries(dictFrom(reply))) {
+                if (!fresh.has(key) && !Number.isNaN(value))
+                    this._values.set(key, value);
+            }
             this._onChange();
         } catch (e) {
             if (generation !== this._generation)
@@ -145,6 +155,7 @@ export class PveClient {
     /** NaN means the value no longer exists. */
     _merge(dict) {
         for (const [key, value] of Object.entries(dict)) {
+            this._fresh?.add(key);
             if (Number.isNaN(value))
                 this._values.delete(key);
             else
@@ -157,6 +168,7 @@ export class PveClient {
         this._generation++;
         this._dropProxy();
         this._values = new Map();
+        this._fresh = null;
         this._setDaemon('not-running');
     }
 

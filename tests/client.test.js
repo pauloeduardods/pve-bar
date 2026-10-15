@@ -155,6 +155,32 @@ test('a stale GetValues from the old session does not overwrite the new one', as
     assert.deepEqual(values(client), {'home/node/pve/cpu': 99});
 });
 
+test('an Updated that beats the GetValues reply is not undone by it', async () => {
+    // pved can answer GetValues before its first poll (empty) while the
+    // Updated carrying everything arrives first.
+    const {client} = start();
+    globalThis.FAKE_BUS.holdCalls = true;
+    globalThis.FAKE_BUS.values = {};
+    globalThis.FAKE_BUS.appear();
+    await tick();
+    globalThis.FAKE_BUS.proxy.emitUpdated({'home/node/pve/cpu': 23.4, 'home/node/pve/disk': 38});
+    globalThis.FAKE_BUS.pending.shift()();
+    await tick();
+    assert.deepEqual(values(client), {'home/node/pve/cpu': 23.4, 'home/node/pve/disk': 38});
+});
+
+test('the GetValues reply fills keys no Updated touched, and never revives deleted ones', async () => {
+    const {client} = start();
+    globalThis.FAKE_BUS.holdCalls = true;
+    globalThis.FAKE_BUS.values = {'home/node/pve/cpu': 10, 'home/node/pve/mem': 61, 'home/guest/100/cpu': 5};
+    globalThis.FAKE_BUS.appear();
+    await tick();
+    globalThis.FAKE_BUS.proxy.emitUpdated({'home/node/pve/cpu': 12, 'home/guest/100/cpu': NaN});
+    globalThis.FAKE_BUS.pending.shift()();
+    await tick();
+    assert.deepEqual(values(client), {'home/node/pve/cpu': 12, 'home/node/pve/mem': 61});
+});
+
 test('a failing GetValues keeps the daemon running with no values', async () => {
     const {client} = start();
     globalThis.FAKE_BUS.callError = new Error('boom');
