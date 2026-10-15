@@ -82,6 +82,19 @@ async fn proxy(conn: &Connection) -> zbus::Proxy<'static> {
     zbus::Proxy::new(conn, NAME, PATH, NAME).await.unwrap()
 }
 
+/// pved claims its name before its first poll (so D-Bus activation is quick),
+/// and until that poll has published there is nothing to read yet.
+async fn wait_for_first_poll(p: &zbus::Proxy<'_>) -> HashMap<String, f64> {
+    for _ in 0..100 {
+        let values: HashMap<String, f64> = p.call("GetValues", &()).await.unwrap();
+        if !values.is_empty() {
+            return values;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("pved published no values within 2 s");
+}
+
 fn rt() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -97,6 +110,7 @@ fn publishes_servers_nodes_guests_and_values() {
         let conn = connect(&bus.address).await;
         wait_for_name(&conn).await;
         let p = proxy(&conn).await;
+        let values = wait_for_first_poll(&p).await;
 
         let version: String = p.get_property("Version").await.unwrap();
         assert_eq!(version, env!("CARGO_PKG_VERSION"));
@@ -116,11 +130,14 @@ fn publishes_servers_nodes_guests_and_values() {
         assert!(guests.iter().any(|g| g.0 == "lab" && g.1 == 100));
         assert!(guests.iter().any(|g| g.0 == "home" && g.1 == 100));
 
-        let values: HashMap<String, f64> = p.call("GetValues", &()).await.unwrap();
         assert!(values.contains_key("home/node/pve/cpu"));
         assert!(values.contains_key("home/node/pve/temp"));
         assert!(values.contains_key("lab/node/lab1/mem"));
-        assert!(values.keys().all(|k| k.starts_with("home/") || k.starts_with("lab/")));
+        assert!(
+            values
+                .keys()
+                .all(|k| k.starts_with("home/") || k.starts_with("lab/"))
+        );
     });
 }
 
@@ -132,7 +149,7 @@ fn updated_carries_only_changes() {
         let conn = connect(&bus.address).await;
         wait_for_name(&conn).await;
         let p = proxy(&conn).await;
-        let all: HashMap<String, f64> = p.call("GetValues", &()).await.unwrap();
+        let all = wait_for_first_poll(&p).await;
         let mut updates = p.receive_signal("Updated").await.unwrap();
         let msg = tokio::time::timeout(Duration::from_secs(5), updates.next())
             .await
@@ -140,6 +157,9 @@ fn updated_carries_only_changes() {
             .unwrap();
         let (changed,): (HashMap<String, f64>,) = msg.body().deserialize().unwrap();
         assert!(!changed.is_empty());
-        assert!(changed.len() < all.len(), "only what changed, not everything");
+        assert!(
+            changed.len() < all.len(),
+            "only what changed, not everything"
+        );
     });
 }
