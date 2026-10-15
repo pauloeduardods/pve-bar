@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Unit]
+Description=pve-bar temperature agent (hwmon over HTTP, read-only)
+Documentation=https://github.com/pauloeduardods/pve-bar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# Binds 0.0.0.0:9101 by default. To listen on one LAN address only, use a
+# drop-in (systemctl edit pve-temp-agent) with:
+#   [Service]
+#   ExecStart=
+#   ExecStart=/usr/local/bin/pve-temp-agent --listen 192.168.1.10:9101
+ExecStart=/usr/local/bin/pve-temp-agent
+Restart=on-failure
+RestartSec=5s
+
+# The token (0600 root) is handed over by systemd, readable only by this
+# service, at $CREDENTIALS_DIRECTORY/token.
+LoadCredential=token:/etc/pve-temp-agent/token
+
+# A throwaway unprivileged user and no capabilities: the port is above 1024
+# and every hwmon/hostname file it reads is world-readable.
+DynamicUser=yes
+PrivateUsers=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# Filesystem: everything read-only or hidden.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+# Not "pid": that would hide /proc/sys/kernel/hostname, which names the node.
+ProcSubset=all
+UMask=0077
+
+# Network: TCP over IPv4/IPv6 only. To also filter by peer in the kernel,
+# add e.g. IPAddressDeny=any and IPAddressAllow=192.168.1.20 (your desktop).
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+MemoryMax=32M
+TasksMax=4
+
+[Install]
+WantedBy=multi-user.target

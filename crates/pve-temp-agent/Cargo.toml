@@ -1,0 +1,15 @@
+[package]
+name = "pve-temp-agent"
+description = "Tiny std-only agent for the Proxmox host: serves hwmon temperatures over HTTP behind a token"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Deliberately no dependencies: it runs on the Proxmox host, builds as a
+# static musl binary and keeps the attack surface to the standard library.
+[dependencies]
+
+[lints]
+workspace = true
