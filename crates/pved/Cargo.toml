@@ -1,0 +1,21 @@
+[package]
+name = "pved"
+description = "pve-bar user service: polls Proxmox VE and publishes it on the session bus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pve-core.workspace = true
+pve-sys.workspace = true
+futures-util = { version = "0.3", default-features = false }
+tokio.workspace = true
+zbus.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["time"] }
+
+[lints]
+workspace = true

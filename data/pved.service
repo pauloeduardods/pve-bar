@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# pve-bar user service. Installed by install.sh into ~/.config/systemd/user/;
+# @PVED@ is replaced with the installed binary path.
+[Unit]
+Description=pve-bar: Proxmox VE monitor for the GNOME top bar
+Documentation=https://github.com/pauloeduardods/pve-bar
+# Needs the session bus and the keyring of the graphical session.
+After=dbus.socket
+
+[Service]
+Type=dbus
+BusName=io.github.pauloeduardods.PveBar1
+ExecStart=@PVED@
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# A small, low-priority network client: it should never be noticed.
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
+MemoryHigh=24M
+MemoryMax=48M
+TasksMax=8
+
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077

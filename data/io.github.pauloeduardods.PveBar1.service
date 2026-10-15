@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.pauloeduardods.PveBar1
+Exec=@PVED@
+SystemdService=pved.service
