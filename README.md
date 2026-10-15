@@ -1,0 +1,135 @@
+# pve-bar
+
+Your Proxmox VE servers in the GNOME top bar, next to Wi-Fi:
+
+```
+ [▣ 23%] [▤ 61%] [♨ 54°]   ← panel: CPU, RAM and temperature of the server you pick
+```
+
+Click it for every server you watch: each node's CPU, RAM, disk and temperature, and a list of VMs and containers with their status and usage. Several independent servers (or clusters) can be watched at once; one being down never hides the others.
+
+pve-bar only reads. It never starts, stops or changes anything in Proxmox.
+
+## How it fits together
+
+- **pved**: a small service in your session (`systemd --user`). Every 10 s it makes one `GET /cluster/resources` call per server, rounds the numbers to what the panel shows, and publishes only what changed on the session D-Bus. It uses about 5 MB of RAM and no measurable CPU.
+- **pvectl**: the command line (`pvectl setup`, `status`, `doctor`).
+- **The GNOME extension**: draws what pved publishes. It never touches the network, files or timers itself. Without pved it shows `pve off`.
+- **pve-temp-agent** (optional): a tiny program on the Proxmox host that serves its temperatures, since the Proxmox API does not. See [deploy/pve-temp-agent](deploy/pve-temp-agent/README.md).
+
+Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Requirements
+
+- GNOME Shell 46 to 50 (Ubuntu 24.04 or newer), with the GNOME Keyring (standard).
+- Proxmox VE 7 or newer.
+- To build: a Rust toolchain, 1.88 or newer ([rustup](https://rustup.rs)).
+
+## 1. Create a read-only API token in Proxmox
+
+Do this once per server, in the Proxmox web UI (or the shell commands below, as root on the host).
+
+1. **Datacenter → Permissions → Users → Add**: user `monitor`, realm `Proxmox VE authentication server` (`pve`). No password is needed.
+2. **Datacenter → Permissions → API Tokens → Add**: user `monitor@pve`, token id `pve-bar`. Leave **Privilege Separation** checked. Copy the **secret**: Proxmox shows it only once.
+3. **Datacenter → Permissions → Add → API Token Permission**: path `/`, token `monitor@pve!pve-bar`, role **PVEAuditor**, Propagate checked.
+
+The same from the host shell:
+
+```bash
+pveum user add monitor@pve --comment "pve-bar (read-only)"
+pveum user token add monitor@pve pve-bar --privsep 1    # prints the secret once
+pveum acl modify / --tokens 'monitor@pve!pve-bar' --roles PVEAuditor
+```
+
+`PVEAuditor` can only read. `pvectl doctor` warns if a token can change anything.
+
+## 2. Install
+
+```bash
+./install.sh
+```
+
+That builds pved and pvectl, installs them with the extension for your user, and enables the extension. Nothing needs root or sudo. Run it again to upgrade.
+
+GNOME Shell keeps the extension code it loaded, so a new version shows up after the shell reloads:
+
+- **X11:** press **Alt+F2**, type `r`, Enter. Your windows stay open.
+- **Wayland:** log out and back in.
+
+What goes where (all recorded in a manifest; `./install.sh --uninstall` removes exactly those files):
+
+| File | Destination |
+|---|---|
+| pved | `~/.local/libexec/pve-bar/pved` |
+| pvectl | `~/.local/bin/pvectl` |
+| systemd user unit | `~/.config/systemd/user/pved.service` |
+| D-Bus activation | `~/.local/share/dbus-1/services/io.github.pauloeduardods.PveBar1.service` |
+| extension | `~/.local/share/gnome-shell/extensions/pve-bar@paulo/` |
+
+Your servers (`~/.config/pve-bar/pved.conf`) and their tokens (GNOME Keyring) are kept on uninstall.
+
+## 3. Add your servers
+
+```bash
+pvectl setup home     # any short name: a-z, 0-9 and -
+pvectl setup lab      # as many as you like
+```
+
+`setup` asks for the URL, the token id and the secret, and then:
+
+- **Certificate:** Proxmox uses a self-signed certificate, so pve-bar pins its SHA-256 fingerprint. `setup` shows the fingerprint the server presents and asks you to compare it with **Node → System → Certificates** (or `openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256` on the host). A server with a public certificate (Let's Encrypt) needs no pinning.
+- **Test:** it tries the token before saving anything and warns if the token can do more than read.
+- **Storage:** the secret goes to the GNOME Keyring, never to a file. The config file holds only the URL, token id, fingerprint and agent URL.
+- **Reload:** it tells pved to re-read the config.
+
+Run `pvectl setup NAME` again to change a server (Enter keeps each value), and `pvectl remove NAME` to forget it and its secrets.
+
+## 4. Temperature (optional)
+
+The Proxmox API has no temperatures. To show them, install pve-temp-agent on each host: it is a 500 KB static binary with no dependencies, sandboxed by systemd, that serves `/sys/class/hwmon` readings behind its own token. Follow [deploy/pve-temp-agent/README.md](deploy/pve-temp-agent/README.md), then run `pvectl setup NAME` again and give it the agent URL and token.
+
+## Command line
+
+```bash
+pvectl status            # every server: nodes and guests
+pvectl status home       # one server
+pvectl status --json     # machine-readable
+pvectl doctor            # check config, keyring, TLS, token, privileges, agent, pved, extension
+```
+
+`status` and `doctor` talk to Proxmox directly with the same config and keyring, so they work without pved. `doctor` only reads; when something is wrong it prints what to run. It exits with 1 when something needs attention.
+
+```
+[ ok ] config                 /home/you/.config/pve-bar/pved.conf: home, lab
+[ ok ] home: token            monitor@pve!pve-bar found in the GNOME Keyring
+[ ok ] home: api              https://pve.lan:8006 answers, Proxmox VE 9.0.3 (pinned certificate)
+[ ok ] home: privileges       read-only (Audit privileges only)
+[ ok ] home: temperature      http://pve.lan:9101: node pve at 54°C (12 sensors)
+[ ok ] pved                   running, version 0.1.0
+[ ok ] pved: home             ok
+[ ok ] extension              installed (gnome-extensions info pve-bar@paulo)
+
+Nothing to fix.
+```
+
+## Development
+
+```bash
+cargo test --workspace                                    # Rust tests (private D-Bus, local HTTP, never the real ones)
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+cargo bench -p pve-core                                   # ring buffer, snapshot and diff timings
+npm test          # extension and installer tests (node, fake D-Bus, no GNOME needed)
+npm run check     # syntax check of every module
+
+# pved with two synthetic servers (home: 30 guests, lab: 6), no Proxmox needed:
+~/.local/libexec/pve-bar/pved --fake     # or: systemctl --user edit pved and add --fake
+
+# logs:
+journalctl --user -f -u pved
+journalctl -f -o cat /usr/bin/gnome-shell | grep -i pve-bar
+```
+
+The pved integration tests need `dbus-daemon` (package `dbus-daemon` on Ubuntu); each test starts its own private bus.
+
+pve-bar is licensed under the [GNU GPL v3.0 or later](LICENSE). Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/); see [CONTRIBUTING.md](CONTRIBUTING.md).
