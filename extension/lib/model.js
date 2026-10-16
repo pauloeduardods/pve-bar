@@ -447,6 +447,20 @@ export function sparklinePieces(samples, width, height, {levelOf = NORMAL, minRa
     return pieces;
 }
 
+/**
+ * Whether a graph must repaint on a client change: its own series got a
+ * value, or at least one column of time (`windowS` / `columns`) passed
+ * since its last paint, so a flat series still scrolls and an old spike
+ * leaves the window. `lastPaintUs` null or 0 means never painted.
+ */
+export function graphNeedsRepaint(lastPaintUs, nowUs, windowS, columns, gotValue) {
+    if (gotValue || !lastPaintUs)
+        return true;
+    if (!(windowS > 0) || !(columns > 0))
+        return false;
+    return nowUs - lastPaintUs >= (windowS * 1e6) / columns;
+}
+
 /** How many bars of `barWidth` plus `gap` pixels fit in `width`. */
 export function barSlots(width, barWidth = 3, gap = 1) {
     return Math.max(1, Math.floor((width + gap) / (barWidth + gap)));

@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    GRAPH_WIDTHS, Level, barPieces, barSlots, formatGiB, formatMemory, formatPercent, formatRate, formatTemp,
+    GRAPH_WIDTHS, Level, barPieces, barSlots, formatGiB, graphNeedsRepaint, formatMemory, formatPercent, formatRate, formatTemp,
     guestRows, guestSetKey, guestSummary, groupByServer, level, nodeSummary, nodeValue, parseColor, pickNode,
     pickServer, sampleSeries, sanitizeThresholds, sectionKey, serverIdsKey, sparklinePieces, stateBadge,
     statusInfo, worstLevel,
@@ -223,6 +223,19 @@ test('sampleSeries: nothing to draw is null; the output array can be reused', ()
     const out = new Array(5);
     assert.equal(sampleSeries(steps([[0, 1]]), now, 100, 5, out), out);
     assert.notEqual(sampleSeries(steps([[0, 1]]), now, 100, 4, out), out, 'wrong size: a new array');
+});
+
+test('a graph repaints when its series got a value or a column of time passed', () => {
+    // 900 s over 30 px: one column is 30 s.
+    const last = 1000 * S;
+    assert.equal(graphNeedsRepaint(last, last + 29 * S, 900, 30, false), false, 'less than a column');
+    assert.equal(graphNeedsRepaint(last, last + 30 * S, 900, 30, false), true, 'a column passed');
+    assert.equal(graphNeedsRepaint(last, last + 1 * S, 900, 30, true), true, 'its series got a value');
+    assert.equal(graphNeedsRepaint(0, last, 900, 30, false), true, 'never painted');
+    assert.equal(graphNeedsRepaint(null, last, 900, 30, false), true);
+    assert.equal(graphNeedsRepaint(last, last + 10 * S, 300, 30, false), true, '300 s / 30 px: 10 s');
+    assert.equal(graphNeedsRepaint(last, last + 9 * S, 300, 30, false), false);
+    assert.equal(graphNeedsRepaint(last, last + 1e9 * S, 900, 0, false), false, 'no columns: nothing to scroll');
 });
 
 test('line pieces: one point per column, split at gaps', () => {

@@ -24,7 +24,8 @@ import {
     serializeLayout,
 } from '../layout.js';
 import {
-    Level, barPieces, barSlots, formatMemory, formatPercent, formatTemp, groupByServer, guestRows, guestSummary,
+    Level, barPieces, barSlots, formatMemory, formatPercent, formatTemp, graphNeedsRepaint, groupByServer, guestRows,
+    guestSummary,
     level, nodeSummary, nodeValue, parseColor, pickServer, sampleSeries, sectionKey, serverIdsKey,
     sparklinePieces, stateBadge, statusInfo, worstLevel,
 } from '../model.js';
@@ -92,6 +93,7 @@ function makeLayoutSegment() {
         },
         spec: null, // the rendered graph spec the next repaint draws
         samples: null, // reused column buffer
+        lastPaintUs: 0, // monotonic time of the last paint (0 = never)
     };
 }
 
@@ -333,6 +335,7 @@ class PveIndicator extends PanelMenu.Button {
     _renderSegments(snap, changed) {
         const rendered = renderLayout(this._layout, snap, this._options);
         const style = this._style;
+        let now = 0; // read once, only when a graph needs the time
         for (let i = 0; i < rendered.length; i++) {
             const r = rendered[i];
             const seg = this._segs[i];
@@ -359,8 +362,15 @@ class PveIndicator extends PanelMenu.Button {
                 continue;
             }
             update(seg, 'graphWidth', spec.width, w => seg.graph.set_width(w));
-            const repaint = changed === null || !sameGraph(seg.spec, spec) ||
-                (spec.key !== null && Object.hasOwn(changed, spec.key));
+            let repaint = changed === null || !sameGraph(seg.spec, spec);
+            if (!repaint && spec.key !== null) {
+                // Its series got a value, or a column of time passed: a flat
+                // series still scrolls and an old spike leaves the window.
+                now ||= GLib.get_monotonic_time();
+                const columns = spec.kind === 'bars' ? barSlots(spec.width) : spec.width;
+                repaint = graphNeedsRepaint(seg.lastPaintUs, now, spec.window, columns,
+                    Object.hasOwn(changed, spec.key));
+            }
             seg.spec = spec;
             if (repaint)
                 seg.graph.queue_repaint();
@@ -386,6 +396,8 @@ class PveIndicator extends PanelMenu.Button {
     /** Paints a segment's graph from the client's history: a line, an area or bars. */
     _drawGraph(seg) {
         const spec = seg.spec;
+        const now = GLib.get_monotonic_time();
+        seg.lastPaintUs = now;
         const series = spec?.key ? this._client?.snapshot().history.get(spec.key) : null;
         if (!series)
             return;
@@ -394,7 +406,7 @@ class PveIndicator extends PanelMenu.Button {
         const columns = spec.kind === 'bars' ? barSlots(width) : Math.max(1, Math.round(width));
         if (seg.samples?.length !== columns)
             seg.samples = new Array(columns);
-        const samples = sampleSeries(series, GLib.get_monotonic_time(), spec.window, columns, seg.samples);
+        const samples = sampleSeries(series, now, spec.window, columns, seg.samples);
         if (!samples)
             return;
         const options = {levelOf: spec.levelOf, minRange: spec.minRange, percent: spec.percent};

@@ -176,6 +176,10 @@ value are dropped, at most 12 segments × 8 readings, 200-char templates,
 
 Port helios' Cairo helpers (`paintPieces`, `paintBars`); bar graphs in
 `St.DrawingArea`, repainted only when one of their series got a value.
+On every client change (each `Updated`), a graph also repaints when at least
+one column of time (`window` s / its columns) has passed since its last
+paint (`graphNeedsRepaint` in `model.js`), so a flat series still scrolls
+and an old spike leaves the window, with no timer.
 
 ## 4. Layout editor (lane C, after lane B)
 
