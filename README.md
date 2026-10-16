@@ -124,7 +124,7 @@ pve-bar sends a GNOME notification (source "pve-bar") when something needs atten
 | Host RAM | on, 95 % for 120 s | a node's RAM stays at or above the limit | below limit − 5 |
 | Host disk | on, 90 % | a node's disk reaches the limit | below limit − 2 |
 | Server unreachable | on, 120 s | a server's state is not `ok` for that long | `ok` again |
-| Guest stopped | off | a guest that was running stops (optionally only the listed `server/vmid`) | it runs again |
+| Guest stopped | off | a guest that was running or paused stops; pausing alone is silent (optionally only the listed `server/vmid`) | it runs again |
 | Guest started | off | a guest starts | n/a |
 
 Nothing fires for the state found when pve-bar connects, and a missing reading (for example no temperature agent) never alerts.
