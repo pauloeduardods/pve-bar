@@ -41,7 +41,7 @@ const heard = () => globalThis.FAKE_BUS.calls
     .filter(c => c.method !== 'GetValues')
     .map(c => (c.method === 'GetHistory' ? `GetHistory ${c.params[0].join(',')}` : `${c.method} ${c.params.join('/')}`));
 
-test('opening a guest detail watches it and fetches only its new keys; going back unwatches', async () => {
+test('opening a guest detail watches it and fetches its new keys; going back unwatches', async () => {
     const {client, needs} = await connected();
     needs.setPanel(['home/node/pve/cpu'], 900);
     await tick();
@@ -49,7 +49,9 @@ test('opening a guest detail watches it and fetches only its new keys; going bac
 
     needs.showGuest('home', 100);
     await tick();
-    assert.deepEqual(heard(), ['Watch home/100', `GetHistory ${guestHistoryKeys('home', 100).join(',')}`]);
+    // The hour of the detail exceeds the bar's 900 s: the held node key is fetched again too.
+    assert.deepEqual(heard(), ['Watch home/100',
+        `GetHistory ${[...guestHistoryKeys('home', 100), 'home/node/pve/cpu'].join(',')}`]);
     assert.ok(client.snapshot().history.has('home/guest/100/cpu'), 'backfilled hour loaded');
 
     globalThis.FAKE_BUS.calls.length = 0;
