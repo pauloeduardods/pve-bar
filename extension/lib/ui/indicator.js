@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The top-bar button: the segments of the user's layout in the panel (see
-// lib/layout.js), details and the guest list in its menu. Everything comes
-// from pved through PveClient; this file only renders. It has no timers: it
-// redraws when pved reports a change or a setting changes. Actors are only
-// touched when what they show changed, graphs repaint only when their series
-// got a value, the menu is not updated while it is closed, and the guest
-// rows are created once and updated in place.
+// lib/layout.js) and, in its menu, the status, the servers (ui/menu.js) and
+// Settings. Everything comes from pved through PveClient; this file only
+// renders. It has no timers: it redraws when pved reports a change or a
+// setting changes. Actors are only touched when what they show changed,
+// graphs repaint only when their series got a value, and the menu is not
+// updated while it is closed.
 
 import GObject from 'gi://GObject';
 import GLib from 'gi://GLib';
@@ -20,37 +20,18 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {PveClient} from '../client.js';
 import {paintBars, paintPieces} from '../draw.js';
 import {
-    layoutNeeds, levelColor, loadLayout, readOptions, readStyle, renderLayout, segmentColor, segmentMarkup,
-    serializeLayout,
+    layoutNeeds, levelColor, loadLayout, pinGuest, readOptions, readStyle, renderLayout, segmentColor,
+    segmentMarkup, serializeLayout,
 } from '../layout.js';
+import {MenuNeeds} from '../menuModel.js';
 import {
-    Level, barPieces, barSlots, formatMemory, formatPercent, formatTemp, graphNeedsRepaint, groupByServer, guestRows,
-    guestSummary,
-    level, nodeSummary, nodeValue, parseColor, pickServer, sampleSeries, sectionKey, serverIdsKey,
-    sparklinePieces, stateBadge, statusInfo, worstLevel,
+    Level, barPieces, barSlots, graphNeedsRepaint, parseColor, pickServer, sampleSeries, sparklinePieces,
+    statusInfo,
 } from '../model.js';
+import {ServerMenu} from './menu.js';
+import {makeInfoRow, setText, setVisible} from './widgets.js';
 
-// Each holder caches what its actor shows, so GNOME is only called on a change.
-function setText(holder, text) {
-    if (holder.text === text)
-        return;
-    holder.text = text;
-    holder.label.set_text(text);
-}
-
-function setStyle(holder, style) {
-    if (holder.style === style)
-        return;
-    holder.style = style;
-    holder.actor.set_style(style);
-}
-
-function setVisible(holder, visible) {
-    if (holder.visible === visible)
-        return;
-    holder.visible = visible;
-    holder.actor.visible = visible;
-}
+const FOLLOW = Object.freeze({color: 'follow'});
 
 function makeLabel() {
     const label = new St.Label({text: '--', y_align: Clutter.ActorAlign.CENTER});
@@ -105,43 +86,6 @@ function update(seg, key, value, apply) {
     apply(value);
 }
 
-function makeInfoRow(title) {
-    const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
-    const name = new St.Label({text: title, x_expand: true, y_align: Clutter.ActorAlign.CENTER});
-    const value = new St.Label({
-        text: '--', style_class: 'pve-bar-menu-value', y_align: Clutter.ActorAlign.CENTER,
-    });
-    item.add_child(name);
-    item.add_child(value);
-    return {
-        actor: item, item, name, value,
-        // Cache holders for the two labels and the row itself.
-        nameHolder: {label: name, text: title},
-        valueHolder: {label: value, actor: value, text: '--', style: null},
-        visible: true,
-    };
-}
-
-function makeGuestRow() {
-    const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
-    const dot = new St.Label({style_class: 'pve-bar-guest-dot', y_align: Clutter.ActorAlign.CENTER});
-    const title = new St.Label({x_expand: true, y_align: Clutter.ActorAlign.CENTER});
-    const badge = new St.Label({style_class: 'pve-bar-guest-badge', y_align: Clutter.ActorAlign.CENTER});
-    const usage = new St.Label({
-        style_class: 'pve-bar-guest-usage pve-bar-menu-dim', y_align: Clutter.ActorAlign.CENTER,
-    });
-    for (const actor of [dot, title, badge, usage])
-        item.add_child(actor);
-    return {
-        item, dot, usage,
-        dotClass: '',
-        dotHolder: {label: dot, text: null},
-        titleHolder: {label: title, text: null},
-        badgeHolder: {label: badge, text: null},
-        usageHolder: {label: usage, text: null},
-    };
-}
-
 function sameGraph(a, b) {
     return a !== null && b !== null && a.key === b.key && a.kind === b.kind && a.window === b.window &&
         a.color === b.color && a.width === b.width && a.levelOf === b.levelOf;
@@ -154,8 +98,6 @@ class PveIndicator extends PanelMenu.Button {
 
         this._ext = extension;
         this._settings = extension.getSettings();
-        this._idsKey = null;
-        this._sections = [];
         this._segs = [];
         this._layout = null;
         this._layoutKey = null;
@@ -165,14 +107,21 @@ class PveIndicator extends PanelMenu.Button {
         this._readSettings();
 
         this._client = new PveClient(changed => this._render(changed));
+        // The history and the guest watch the menu adds to the bar's.
+        this._needs = new MenuNeeds(this._client);
         this._buildPanel();
         this._buildMenu();
 
         // The menu is not kept up to date while it is closed (most of the
-        // time); opening it renders it first.
+        // time); opening it renders it first, and closing it drops what only
+        // the menu needed (guest details, history).
         this.menu.connect('open-state-changed', (_menu, open) => {
-            if (open && this._menuStale)
+            if (open) {
+                this._serverMenu.opened();
                 this._render(undefined);
+            } else {
+                this._serverMenu.closed();
+            }
         });
         this._settingsId = this._settings.connect('changed', (_s, key) => {
             this._readSettings();
@@ -249,10 +198,18 @@ class PveIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._statusSection);
         this._statusVisible = {actor: this._statusSection.actor, visible: true};
 
-        // One section per server, rebuilt only when the set of servers changes.
-        this._serversSection = new PopupMenu.PopupMenuSection();
-        this.menu.addMenuItem(this._serversSection);
-        this._serversVisible = {actor: this._serversSection.actor, visible: true};
+        // One section per server (ui/menu.js).
+        this._serverMenu = new ServerMenu({
+            needs: this._needs,
+            snapshot: () => this._client?.snapshot() ?? null,
+            options: () => this._options,
+            styleFor: lvl => this._styleFor(lvl),
+            rgbOf: area => this._rgbOf(area, FOLLOW),
+            layout: () => this._layout,
+            pinGuest: (server, vmid) => this._pinGuest(server, vmid),
+        });
+        this.menu.addMenuItem(this._serverMenu.section);
+        this._serversVisible = {actor: this._serverMenu.section.actor, visible: true};
 
         this._fakeRow = makeInfoRow('(fake data)');
         this._fakeRow.name.add_style_class_name('pve-bar-menu-dim');
@@ -267,7 +224,8 @@ class PveIndicator extends PanelMenu.Button {
 
     /**
      * `changed`: the values of an Updated (only their graphs repaint), null
-     * when anything may have changed, undefined for "the menu opened".
+     * when anything may have changed, undefined for "the menu opened" (the
+     * menu is drawn in full, the bar is left alone).
      */
     _render(changed) {
         if (!this._client || !this._layout)
@@ -304,7 +262,7 @@ class PveIndicator extends PanelMenu.Button {
             setVisible(this._statusHint, info.hint !== '');
         }
         if (listed)
-            this._renderServers(snap);
+            this._serverMenu.render(snap, changed ?? null);
     }
 
     /**
@@ -318,7 +276,7 @@ class PveIndicator extends PanelMenu.Button {
         if (key === this._needsKey)
             return;
         this._needsKey = key;
-        this._client.setHistoryKeys(needs.keys, needs.span || 1);
+        this._needs.setPanel(needs.keys, needs.span);
         const wanted = new Map(needs.watches.map(w => [`${w.server}/${w.vmid}`, w]));
         for (const [id, w] of this._watching) {
             if (!wanted.has(id))
@@ -425,141 +383,16 @@ class PveIndicator extends PanelMenu.Button {
         return levelColor(lvl, this._style) || null;
     }
 
-    _levelOf(value, key) {
-        const t = this._options.thresholds[key];
-        return level(value, t.warm, t.hot);
-    }
-
     _styleFor(lvl) {
         const color = this._colorFor(lvl);
         return color ? `color: ${color};` : null;
     }
 
-    // ---------------------------------------------------------------- servers
-
-    _renderServers(snap) {
-        const idsKey = serverIdsKey(snap.servers);
-        if (idsKey !== this._idsKey) {
-            this._idsKey = idsKey;
-            this._serversSection.removeAll();
-            this._sections = snap.servers.map(() => ({key: null}));
-        }
-        groupByServer(snap.servers, snap.nodes, snap.guests).forEach((group, i) => {
-            const sec = this._sections[i];
-            const key = sectionKey(group);
-            if (sec.key !== key)
-                this._buildSection(sec, group, key, i);
-            this._updateSection(sec, group, snap.values);
-        });
-    }
-
-    /** (Re)creates the rows of one server; runs only when its node or guest set changed. */
-    _buildSection(sec, group, key, position) {
-        sec.key = key;
-        sec.section?.destroy();
-        sec.section = new PopupMenu.PopupMenuSection();
-        // At its own position, so a rebuilt server keeps its place in the list.
-        this._serversSection.addMenuItem(sec.section, position);
-
-        sec.header = makeInfoRow(group.name);
-        sec.header.name.add_style_class_name('pve-bar-server-name');
-        sec.header.value.text = '';
-        sec.message = makeInfoRow('');
-        sec.message.name.add_style_class_name('pve-bar-menu-dim');
-        sec.message.value.text = '';
-        sec.section.addMenuItem(sec.header.item);
-        sec.section.addMenuItem(sec.message.item);
-
-        // One node: detailed rows. A cluster: one compact row per node.
-        sec.detailed = group.nodes.length === 1;
-        sec.nodes = [];
-        if (sec.detailed) {
-            sec.rows = {
-                node: makeInfoRow('Node'),
-                cpu: makeInfoRow('CPU'),
-                mem: makeInfoRow('RAM'),
-                disk: makeInfoRow('Disk'),
-                temp: makeInfoRow('Temperature'),
-            };
-            for (const row of Object.values(sec.rows))
-                sec.section.addMenuItem(row.item);
-        } else {
-            sec.nodes = group.nodes.map(n => {
-                const row = makeInfoRow(n.name);
-                sec.section.addMenuItem(row.item);
-                return row;
-            });
-        }
-
-        sec.guestsItem = new PopupMenu.PopupSubMenuMenuItem('Guests');
-        sec.guestsHolder = {label: sec.guestsItem.label, text: null};
-        sec.guestRows = group.guests.map(() => {
-            const row = makeGuestRow();
-            sec.guestsItem.menu.addMenuItem(row.item);
-            return row;
-        });
-        sec.section.addMenuItem(sec.guestsItem);
-        sec.guestsVisible = {actor: sec.guestsItem, visible: true};
-    }
-
-    /** Updates a built section in place: text, colours and visibility only. */
-    _updateSection(sec, group, values) {
-        const badge = stateBadge(group.state);
-        setText(sec.header.valueHolder, badge);
-        setStyle(sec.header.valueHolder,
-            badge ? `color: ${this._settings.get_string('color-hot') || '#f66151'};` : null);
-        setText(sec.message.nameHolder, group.message);
-        setVisible(sec.message, group.message !== '');
-
-        if (sec.detailed) {
-            const node = group.nodes[0];
-            const v = what => nodeValue(values, group.name, node.name, what);
-            const cpu = v('cpu');
-            const mem = v('mem');
-            const temp = v('temp');
-            const rows = sec.rows;
-            setText(rows.node.valueHolder, `${node.name} · ${node.status}`);
-            this._paintRow(rows.cpu, cpu, formatPercent(cpu, 1), 'cpu');
-            this._paintRow(rows.mem, mem,
-                `${formatPercent(mem)} · ${formatMemory(v('mem_used'), v('mem_total'))}`, 'mem');
-            setText(rows.disk.valueHolder, formatPercent(v('disk')));
-            this._paintRow(rows.temp, temp, formatTemp(temp), 'temp');
-            setVisible(rows.temp, temp !== null);
-        } else {
-            group.nodes.forEach((node, i) => {
-                const row = sec.nodes[i];
-                const v = what => nodeValue(values, group.name, node.name, what);
-                const worst = worstLevel([
-                    this._levelOf(v('cpu'), 'cpu'),
-                    this._levelOf(v('mem'), 'mem'),
-                    this._levelOf(v('temp'), 'temp'),
-                ]);
-                setText(row.valueHolder, node.status === 'online'
-                    ? nodeSummary(values, group.name, node.name) : node.status);
-                setStyle(row.valueHolder, this._styleFor(worst));
-            });
-        }
-
-        setText(sec.guestsHolder, `Guests (${guestSummary(group.guests)})`);
-        setVisible(sec.guestsVisible, group.guests.length > 0);
-        guestRows(group.guests, values).forEach((data, i) => {
-            const row = sec.guestRows[i];
-            if (row.dotClass !== data.dotClass) {
-                if (row.dotClass)
-                    row.dot.remove_style_class_name(`pve-bar-dot-${row.dotClass}`);
-                row.dot.add_style_class_name(`pve-bar-dot-${data.dotClass}`);
-                row.dotClass = data.dotClass;
-            }
-            setText(row.dotHolder, data.dot);
-            setText(row.titleHolder, data.title);
-            setText(row.badgeHolder, data.badge);
-            setText(row.usageHolder, data.usage);
-        });
-    }
-
-    _paintRow(row, value, text, key) {
-        setText(row.valueHolder, text);
-        setStyle(row.valueHolder, this._styleFor(this._levelOf(value, key)));
+    /** Appends a segment for this guest to the layout (the menu's "Pin to bar"). */
+    _pinGuest(server, vmid) {
+        const next = serializeLayout(pinGuest(this._layout, server, vmid));
+        if (next !== this._layoutKey)
+            this._settings.set_string('panel-layout', next);
     }
 
     _cleanup() {
@@ -567,6 +400,7 @@ class PveIndicator extends PanelMenu.Button {
             this._settings.disconnect(this._settingsId);
             this._settingsId = 0;
         }
+        this._serverMenu?.destroy();
         this._client?.destroy();
         this._client = null;
     }

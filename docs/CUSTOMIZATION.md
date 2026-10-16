@@ -251,6 +251,34 @@ the server and node or guest. A "Test notification" button in the page.
   `panel-layout`. `Unwatch` when the submenu closes or the menu closes.
 - Nothing updates while the menu is closed.
 
+As built (lane E; `extension/lib/ui/menu.js`, `ui/guestView.js`, pure logic
+in `extension/lib/menuModel.js`):
+
+- GNOME's `PopupMenu` keeps one submenu open per menu: opening a submenu
+  inside a submenu closes its parent. So a server section is an expander
+  (a header item that shows or hides its rows, one server expanded at a
+  time, remembered across openings), the guest list is a real submenu
+  (it scrolls when long), and choosing a guest replaces the list with its
+  detail view and a "← Guests" item instead of opening a third level.
+- The title summary of a cluster is the mean CPU of its online nodes, RAM
+  used over RAM total, the hottest temperature, and the worst level of any
+  node's CPU, RAM or temperature. A server that is not `ok` shows its state
+  in the title and its message on the row below.
+- Node graphs span 15 minutes, guest graphs one hour (the rrddata
+  backfill). Network in/out are graphed too.
+- The disk inside a VM (`fs`) is hidden for containers; for a running VM
+  without it the view says it needs the QEMU guest agent and the
+  `VM.Monitor` privilege (which pve-bar does not recommend granting).
+- `MenuNeeds` asks the client for the union of the bar's history keys and
+  the open menu's (the expanded server's node graphs, the shown guest's
+  `cpu`, `mem`, `netin`, `netout`), and drops the menu-only keys when the
+  menu closes. The guest shown is watched from the moment its view opens
+  until it goes back, its submenu or section closes, the menu closes, or
+  the extension is disabled.
+- Only what is on screen is rendered while the menu is open: the server
+  titles, the expanded section, and the guest list or the detail view while
+  the Guests submenu is open.
+
 ## 7. Footprint (lane A)
 
 `tools/footprint.sh` as helios': `live` (installed pved and gnome-shell,
