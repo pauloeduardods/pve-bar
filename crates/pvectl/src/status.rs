@@ -17,9 +17,34 @@ use pve_core::snapshot::GIB;
 use serde_json::{Value, json};
 use zbus::Connection;
 
-/// Samples per sparkline: 5 minutes at 10 s.
+/// Slots per sparkline: 5 minutes at 10 s.
 const WATCH_WIDTH: usize = 30;
+const SLOT: f64 = 10.0;
+/// A sample older than this does not stand for a slot (pved's backfill
+/// from rrddata has one point per minute).
+const MAX_STALE: f64 = 90.0;
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// One value per [`SLOT`], newest on the right: the newest sample at least
+/// as old as the slot (step semantics), NaN where none is close enough. By
+/// time rather than by sample, so live samples and pved's one-a-minute
+/// backfill share one scale.
+fn resample(ages: &[f64], values: &[f64]) -> Vec<f64> {
+    (0..WATCH_WIDTH)
+        .map(|i| {
+            let from_right = (WATCH_WIDTH - 1 - i) as f64;
+            // Half a slot of slack, so a poll that came a little early
+            // still counts for its slot.
+            let age = (from_right * SLOT - SLOT / 2.0).max(0.0);
+            // Ages are oldest (largest) first.
+            let n = ages.partition_point(|a| *a >= age);
+            match n.checked_sub(1) {
+                Some(j) if ages[j] - age <= MAX_STALE => values.get(j).copied().unwrap_or(f64::NAN),
+                _ => f64::NAN,
+            }
+        })
+        .collect()
+}
 
 struct ServerStatus {
     id: String,
@@ -95,14 +120,14 @@ struct Graphs<'a> {
 }
 
 impl Graphs<'_> {
-    /// The last [`WATCH_WIDTH`] samples of `key`, if any is known.
+    /// The last five minutes of `key` in [`WATCH_WIDTH`] slots, if any
+    /// value is known.
     fn recent(&self, key: &str) -> Option<Vec<f64>> {
-        let (_, values) = self
+        let (ages, values) = self
             .history
             .query(&[key.to_owned()], self.now)
             .remove(key)?;
-        let start = values.len().saturating_sub(WATCH_WIDTH);
-        let recent = values[start..].to_vec();
+        let recent = resample(&ages, &values);
         recent.iter().any(|v| v.is_finite()).then_some(recent)
     }
 
@@ -363,6 +388,28 @@ mod tests {
         assert_eq!(sparkline(&[1.0, f64::NAN, 1.0]), "▅ ▅", "flat");
         assert_eq!(sparkline(&[f64::NAN, f64::NAN]), "  ");
         assert_eq!(sparkline(&[]), "");
+    }
+
+    #[test]
+    fn sparklines_are_by_time_not_by_sample() {
+        // Live polls every 10 s for the last 20 s, one-a-minute backfill
+        // before that.
+        let ages = [240.0, 180.0, 120.0, 60.0, 20.1, 9.9, 0.2];
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let r = resample(&ages, &values);
+        assert_eq!(r.len(), WATCH_WIDTH);
+        assert_eq!(&r[27..], &[5.0, 6.0, 7.0], "an early poll keeps its slot");
+        assert_eq!(
+            &r[23..27],
+            &[4.0; 4],
+            "a minute point stands for its minute"
+        );
+        assert!(r[..5].iter().all(|v| v.is_nan()), "nothing that old: {r:?}");
+        assert!(resample(&[], &[]).iter().all(|v| v.is_nan()));
+        // A gap of more than 90 s is a gap.
+        let r = resample(&[200.0, 0.0], &[1.0, 2.0]);
+        assert!(r[28].is_nan());
+        assert_eq!(r[29], 2.0);
     }
 
     fn statuses(cluster: &FakeCluster) -> Vec<ServerStatus> {
