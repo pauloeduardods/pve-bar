@@ -2,13 +2,14 @@
 //! The per-cycle hot path, timed with std only (no criterion):
 //!   cargo bench -p pve-core
 //! Prints the time per operation for the ring buffer, the snapshot build and
-//! the diff of a 30-guest cluster.
+//! the diff of a 30-guest cluster, and the history.
 
 use std::hint::black_box;
 use std::time::Instant;
 
 use pve_core::diff::diff;
 use pve_core::fake::FakeCluster;
+use pve_core::history::{History, ServerHistory};
 use pve_core::ring::HourRing;
 use pve_core::snapshot::Snapshot;
 
@@ -55,5 +56,20 @@ fn main() {
     });
     time("diff 62 values (nothing changed)", 1_000_000, || {
         diff(&new, &new)
+    });
+
+    let mut history = ServerHistory::default();
+    let mut t = 0.0;
+    time("history record (one cycle, 66 keys)", 100_000, || {
+        t += 10.0;
+        history.record(t, Some(&new));
+    });
+    let keys = vec!["home/node/pve/cpu".to_owned()];
+    let mut all = History::default();
+    for i in 0..360 {
+        all.server("home").record(f64::from(i) * 10.0, Some(&new));
+    }
+    time("GetHistory of one key (360 points)", 100_000, || {
+        all.query(&keys, 3600.0)
     });
 }

@@ -31,7 +31,8 @@ The pve-bar user service. It is started by D-Bus activation through
 systemd --user (pved.service) and needs no options in normal use.
 
   --fake         publish two synthetic servers (home: 30 guests, lab: 6)
-                 instead of talking to Proxmox
+                 instead of talking to Proxmox; watched guests get
+                 synthetic details and a backfilled hour
   --config PATH  read PATH instead of ~/.config/pve-bar/pved.conf
 
 Reload the configuration with: systemctl --user reload pved";
