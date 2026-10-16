@@ -4,7 +4,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    guestFilterChoices, guestLabel, hasLists, listsKey, readsValue, retarget, targetFromChoice, targetOptions,
+    guestFilterChoices, guestLabel, hasLists, listsKey, nodePickerChoices, readsValue, retarget,
+    serverPickerChoices, targetFromChoice, targetOptions,
     thresholdPair, toggleGuestFilter, typedTarget,
 } from '../extension/lib/prefs/choices.js';
 import {defaultLayout, sampleSnapshot, sanitizeLayout, setSegment} from '../extension/lib/layout.js';
@@ -151,4 +152,44 @@ test('thresholdPair keeps warm below hot by moving the other one', () => {
     assert.deepEqual(thresholdPair('warm', 110, 90, 1, 110), {warm: 109, hot: 110});
     assert.deepEqual(thresholdPair('hot', 70, 1, 1, 110), {warm: 1, hot: 2});
     assert.deepEqual(thresholdPair('warm', 40, 30, 30, 110), {warm: 40, hot: 41});
+});
+
+// ---- general page pickers -------------------------------------------------------
+
+test('serverPickerChoices: automatic first, pved servers, stored unknown kept', () => {
+    const {choices, index} = serverPickerChoices(snap, '');
+    assert.deepEqual(choices[0], ['', 'Automatic (first server)']);
+    assert.deepEqual(choices.slice(1).map(([v]) => v), snap.servers.map(s => s.name));
+    assert.equal(index, 0);
+    const named = serverPickerChoices(snap, snap.servers[0].name);
+    assert.equal(named.index, 1);
+    const gone = serverPickerChoices(snap, 'old');
+    assert.deepEqual(gone.choices.at(-1), ['old', 'old (not found)']);
+    assert.equal(gone.index, gone.choices.length - 1);
+});
+
+test('serverPickerChoices: without pved only automatic and the stored value', () => {
+    assert.deepEqual(serverPickerChoices(null, '').choices, [['', 'Automatic (first server)']]);
+    assert.deepEqual(serverPickerChoices(null, 'home').choices.map(([v]) => v), ['', 'home']);
+});
+
+test('nodePickerChoices: the nodes of the chosen (or first) server, stored unknown kept', () => {
+    const first = snap.servers[0].name;
+    const nodes = snap.nodes.filter(n => n.server === first).map(n => n.name);
+    const auto = nodePickerChoices(snap, '', '');
+    assert.deepEqual(auto.choices[0], ['', 'Automatic (first online node)']);
+    assert.deepEqual(auto.choices.slice(1).map(([v]) => v), nodes);
+    assert.equal(auto.index, 0);
+    assert.deepEqual(nodePickerChoices(snap, first, '').choices, auto.choices);
+    const picked = nodePickerChoices(snap, first, nodes[0]);
+    assert.equal(picked.index, 1);
+    const gone = nodePickerChoices(snap, first, 'ghost');
+    assert.deepEqual(gone.choices.at(-1), ['ghost', 'ghost (not found)']);
+    assert.equal(gone.index, gone.choices.length - 1);
+});
+
+test('nodePickerChoices: a server pved does not list has no nodes to pick', () => {
+    const {choices} = nodePickerChoices(snap, 'old', 'pve');
+    assert.deepEqual(choices.map(([v]) => v), ['', 'pve']);
+    assert.deepEqual(nodePickerChoices(null, '', '').choices, [['', 'Automatic (first online node)']]);
 });

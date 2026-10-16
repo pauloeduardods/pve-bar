@@ -138,6 +138,37 @@ export function retarget(layout, index, target) {
     return sanitizeLayout(out);
 }
 
+// ---- general page: the selected server and node ---------------------------------
+
+/**
+ * The server drop-down of Settings → General: {choices, index} with
+ * [value, label] choices. '' is automatic; a stored name pved does not list
+ * is kept and marked "(not found)", so opening Settings changes nothing.
+ */
+export function serverPickerChoices(snapshot, stored) {
+    const choices = [['', 'Automatic (first server)'],
+        ...(snapshot?.servers ?? []).map(s => [s.name, s.state === 'ok' ? s.name : `${s.name} (${s.state})`])];
+    if (!choices.some(([v]) => v === stored))
+        choices.push([stored, `${stored} (not found)`]);
+    return {choices, index: choices.findIndex(([v]) => v === stored)};
+}
+
+/**
+ * The node drop-down: the nodes of the server `server` names ('' = the
+ * first one, as the extension picks it). Same shape and rules as
+ * serverPickerChoices; a stored server pved does not list has no nodes.
+ */
+export function nodePickerChoices(snapshot, server, stored) {
+    const picked = pickServer(snapshot?.servers ?? [], '');
+    const name = server === '' ? picked?.name : (snapshot?.servers ?? []).find(s => s.name === server)?.name;
+    const nodes = name === undefined ? [] : (snapshot?.nodes ?? []).filter(n => n.server === name);
+    const choices = [['', 'Automatic (first online node)'],
+        ...nodes.map(n => [n.name, n.status === 'online' ? n.name : `${n.name} (${n.status})`])];
+    if (!choices.some(([v]) => v === stored))
+        choices.push([stored, `${stored} (not found)`]);
+    return {choices, index: choices.findIndex(([v]) => v === stored)};
+}
+
 // ---- alerts: guests the stop alert covers --------------------------------------
 
 /**
