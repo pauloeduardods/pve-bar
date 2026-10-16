@@ -279,8 +279,10 @@ class PveIndicator extends PanelMenu.Button {
                 this._updateNeeds(snap);
             setVisible(this._statusSeg, info !== null);
             if (info) {
-                for (const seg of this._segs)
+                for (const seg of this._segs) {
                     update(seg, 'visible', false, v => (seg.box.visible = v));
+                    seg.spec = null;
+                }
                 setText(this._statusSeg, info.panel);
             } else {
                 this._renderSegments(snap, changed);
@@ -335,8 +337,10 @@ class PveIndicator extends PanelMenu.Button {
             const r = rendered[i];
             const seg = this._segs[i];
             update(seg, 'visible', r.visible, v => (seg.box.visible = v));
-            if (!r.visible)
+            if (!r.visible) {
+                seg.spec = null; // shown again: repaint
                 continue;
+            }
             update(seg, 'opacity', r.dim ? 128 : 255, v => (seg.box.opacity = v));
             update(seg, 'icon', r.icon, name => {
                 seg.icon.gicon = name ? Gio.icon_new_for_string(this._iconPath(name)) : null;

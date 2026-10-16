@@ -114,9 +114,12 @@ export class PveClient {
      *   state, property, value or history change. `changed` is the Updated
      *   dictionary (key -> value) when only those values changed, null when
      *   anything may have (state, properties, GetValues, history loaded).
+     * @param {{history?: boolean}} options history: false never keeps
+     *   history (setHistoryKeys does nothing), for users that only need values
      */
-    constructor(onChange) {
+    constructor(onChange, {history = true} = {}) {
         this._onChange = onChange;
+        this._keepHistory = history;
         this._daemon = 'connecting';
         this._proxy = null;
         this._signalIds = [];
@@ -183,6 +186,8 @@ export class PveClient {
      * the same keys does nothing.
      */
     setHistoryKeys(keys, spanS = HISTORY_MAX_S) {
+        if (!this._keepHistory)
+            return;
         const span = Math.max(1, Math.min(HISTORY_MAX_S, Number(spanS) || HISTORY_MAX_S));
         const spanUs = span * 1e6;
         const shrunk = spanUs < this._spanUs;

@@ -326,6 +326,18 @@ test('API 1 pved: no GetHistory or Watch, history grows locally, no errors', asy
     assert.deepEqual(series(client, 'home/node/pve/cpu'), [[-10, 23.4], [0, 30]]);
 });
 
+test('history: false never fetches or keeps history', async () => {
+    const client = new PveClient(() => {}, {history: false});
+    client.setHistoryKeys(['home/node/pve/cpu']);
+    globalThis.FAKE_BUS.appear();
+    await tick();
+    await tick();
+    globalThis.FAKE_BUS.proxy.emitUpdated({'home/node/pve/cpu': 30});
+    assert.deepEqual(methods(), ['GetValues']);
+    assert.equal(client.snapshot().history.size, 0);
+    assert.equal(client.snapshot().values.get('home/node/pve/cpu'), 30);
+});
+
 test('a failing GetHistory leaves the seeded history', async () => {
     globalThis.FAKE_BUS.callErrors = {GetHistory: new Error('UnknownMethod')};
     const {client} = start();
