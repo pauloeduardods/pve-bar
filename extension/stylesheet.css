@@ -59,3 +59,20 @@
 .pve-bar-server-name {
     font-weight: bold;
 }
+
+/* A history graph on the same line as a menu reading. */
+.pve-bar-inline-graph {
+    width: 70px;
+    height: 16px;
+    margin: 0 10px;
+}
+
+/* An expanded server: its rows, set off like a submenu. */
+.pve-bar-server-body {
+    background-color: rgba(255, 255, 255, 0.04);
+    border-radius: 6px;
+}
+
+.pve-bar-menu-hint {
+    font-size: 85%;
+}
