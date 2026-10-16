@@ -88,6 +88,14 @@ Run `pvectl setup NAME` again to change a server (Enter keeps each value), and `
 
 The Proxmox API has no temperatures. To show them, install pve-temp-agent on each host: it is a 500 KB static binary with no dependencies, sandboxed by systemd, that serves `/sys/class/hwmon` readings behind its own token. Follow [deploy/pve-temp-agent/README.md](deploy/pve-temp-agent/README.md), then run `pvectl setup NAME` again and give it the agent URL and token.
 
+## The menu
+
+Click the bar to open the menu. Each server is a collapsed line with a summary, coloured by its worst reading: `home · 23% · 61% · 54° · 23/30` is CPU, RAM, the hottest temperature and running/total guests (a server that is down shows its state and why). Click it to see its node with CPU, RAM and temperature graphed inline over the last 15 minutes and the disk, or one compact line per node of a cluster, and a **Guests** list. Click a guest to see its details in place of the list: status, uptime, CPU and RAM over the last hour, network in and out, the disk inside the VM, and **Pin to bar**, which adds a segment for that guest to the bar. **← Guests** goes back.
+
+pved fetches a guest's details only while its view is open (or a bar segment shows them), and the menu is not updated while it is closed.
+
+The disk inside a VM (`fs`) comes from the QEMU guest agent, so the VM needs the agent installed and enabled. On Proxmox VE 8 reading it also needs the `VM.Monitor` privilege, which `PVEAuditor` does not have. pve-bar does **not** recommend granting it: `VM.Monitor` allows QEMU monitor commands, and `pvectl doctor` flags it as more than read access. With the recommended read-only token the disk inside VMs is simply absent, and the guest view says what it would need. Containers have no such reading.
+
 ## Customizing the bar
 
 The bar is a list of segments stored as JSON in the `panel-layout` setting. Each segment reads one target (the selected node, a given node, a guest, or a whole server), shows one or more readings through a template, and can draw a graph of the last 5, 15, 30 or 60 minutes:
@@ -96,7 +104,7 @@ The bar is a list of segments stored as JSON in the `panel-layout` setting. Each
  [▣ 23% ╱╲╱] [▤ 61% ▁▃▅] [♨ 54°] [▭ web · 6% · 45%] [▤ home 2/3 · 23%]
 ```
 
-- **Readings**: node `cpu`, `mem`, `mem-used`, `mem-total`, `disk`, `temp`, `status`, `name`; guest `cpu`, `mem`, `name`, `status`, `netin`, `netout`, `fs` (disk inside the VM, needs the QEMU guest agent); server `running`, `guests`, `state`, `name`, `cpu`, `mem`.
+- **Readings**: node `cpu`, `mem`, `mem-used`, `mem-total`, `disk`, `temp`, `status`, `name`; guest `cpu`, `mem`, `name`, `status`, `netin`, `netout`, `fs` (disk inside the VM, see [The menu](#the-menu)); server `running`, `guests`, `state`, `name`, `cpu`, `mem`.
 - **Templates**: `{cpu}% · {temp}°`, `{cpu:1}` for one decimal, `{{` and `}}` for braces. A mistake shows `--` instead of breaking the bar; a target that no longer exists shows `--`.
 - **Graphs**: line, area or bars, 30, 45 or 70 px wide, in the warm/hot colors of their thresholds or one fixed color. History comes from pved (one call when the extension connects, then every update is appended), so graphs cost no polling.
 - **Presets**: Minimal, Default, Graphs and Cluster (one segment per server).
@@ -104,7 +112,7 @@ The bar is a list of segments stored as JSON in the `panel-layout` setting. Each
 
 Edit it in Settings (Extensions, pve-bar): the **Layout** page lists the segments (move, add, remove; merge a reading into the next segment that reads the same target, split it out), picks each segment's target from the servers, nodes and guests pved lists (or takes typed names while pved is not running), and has the template, icon and graph controls, the presets with Undo, and import/export of the layout as a JSON file. A preview at the top draws the bar with the same code, from pved's live values and history or sample values. **Thresholds** holds the warm/hot limits and colors, **General** the selected server and node and the position in the top bar.
 
-On the first start after an upgrade, the layout is built once from the older `server`, `node` and `show-icons` settings, so the bar looks the same. Details are in [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md). To look at the bar without GNOME Shell: `gjs -m tools/render-bar.js bar.png`.
+On the first start after an upgrade, the layout is built once from the older `server`, `node` and `show-icons` settings, so the bar looks the same. Details are in [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md). To look at the bar without GNOME Shell: `gjs -m tools/render-bar.js bar.png`; the menu: `gjs -m tools/render-menu.js menu.png`.
 
 ## Alerts
 
