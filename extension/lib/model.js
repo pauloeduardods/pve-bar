@@ -254,3 +254,235 @@ export function guestRows(guests, values) {
         };
     });
 }
+
+// ---- rates ----------------------------------------------------------------------
+
+const RATE_UNITS = Object.freeze(['B/s', 'KB/s', 'MB/s', 'GB/s']);
+
+/**
+ * Bytes per second, scaled: 512 -> "512 B/s", 1536 -> "1.5 KB/s",
+ * 12.3 MiB/s -> "12 MB/s" (one decimal below 10, none above; `decimals`
+ * overrides that). Base 1024, as the Proxmox UI.
+ */
+export function formatRate(bytesPerS, decimals = null) {
+    if (missing(bytesPerS))
+        return '--';
+    let v = Math.max(0, bytesPerS);
+    let unit = 0;
+    while (v >= 1000 && unit < RATE_UNITS.length - 1) {
+        v /= 1024;
+        unit++;
+    }
+    const d = decimals ?? (unit === 0 || v >= 10 ? 0 : 1);
+    return `${v.toFixed(d)} ${RATE_UNITS[unit]}`;
+}
+
+// ---- thresholds per reading kind ---------------------------------------------
+
+/** Reading kinds with warm/hot thresholds (`<kind>-warm`, `<kind>-hot` settings). */
+export const THRESHOLD_KINDS = Object.freeze(['cpu', 'mem', 'disk', 'temp', 'fs']);
+
+/** The schema's defaults, used when a setting is unavailable. */
+export const THRESHOLD_DEFAULTS = Object.freeze({
+    cpu: Object.freeze({warm: 70, hot: 90}),
+    mem: Object.freeze({warm: 80, hot: 95}),
+    disk: Object.freeze({warm: 80, hot: 90}),
+    temp: Object.freeze({warm: 70, hot: 85}),
+    fs: Object.freeze({warm: 80, hot: 90}),
+});
+
+// ---- colors -------------------------------------------------------------------
+
+/**
+ * A color setting ("#rgb", "#rrggbb", "rgb(…)", "rgba(…)") as [r, g, b] in
+ * 0–1 for Cairo; null when empty or unreadable (use the theme color).
+ */
+export function parseColor(text) {
+    const value = String(text ?? '').trim().toLowerCase();
+    let m = value.match(/^#([0-9a-f]{3})$/);
+    if (m)
+        return [...m[1]].map(c => parseInt(c + c, 16) / 255);
+    m = value.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/);
+    if (m)
+        return m.slice(1).map(h => parseInt(h, 16) / 255);
+    m = value.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(,[^)]*)?\)$/);
+    if (m)
+        return m.slice(1, 4).map(n => Math.min(255, Number(n)) / 255);
+    return null;
+}
+
+// ---- history and graphs -------------------------------------------------------
+
+/** pved keeps one hour; so does the client, at most. */
+export const HISTORY_MAX_S = 3600;
+
+/** Graph widths in pixels. */
+export const GRAPH_WIDTHS = Object.freeze({narrow: 30, medium: 45, wide: 70});
+
+/** Index of the first time in `times` (sorted) greater than `t`. */
+function upperBound(times, t) {
+    let lo = 0;
+    let hi = times.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (times[mid] <= t)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+/**
+ * A time-stamped step series ({t: [µs], v: [value or NaN for a gap]}, t
+ * ascending) as `width` columns spanning the `spanS` seconds before
+ * `nowUs`, oldest first. A value holds until the next point (step
+ * semantics); each column is the highest value it holds, so a short spike
+ * is never lost, and null where the series has no value (before its first
+ * point, or in a gap). Returns null when no column has a value. Pass `out`
+ * (an array of `width`) to reuse it instead of allocating.
+ */
+export function sampleSeries(series, nowUs, spanS, width, out = null) {
+    const times = series?.t;
+    const values = series?.v;
+    if (!times || times.length === 0 || !(width > 0) || !(spanS > 0))
+        return null;
+    const n = times.length;
+    const span = spanS * 1e6;
+    const start = nowUs - span;
+    const column = span / width;
+    const result = out && out.length === width ? out : new Array(width);
+    let j = upperBound(times, start) - 1; // the point in force at `start`
+    let any = false;
+    for (let i = 0; i < width; i++) {
+        const end = start + (i + 1) * column;
+        let peak = j >= 0 && !Number.isNaN(values[j]) ? values[j] : null;
+        while (j + 1 < n && times[j + 1] < end) {
+            j++;
+            const v = values[j];
+            if (!Number.isNaN(v) && (peak === null || v > peak))
+                peak = v;
+        }
+        result[i] = peak;
+        if (peak !== null)
+            any = true;
+    }
+    return any ? result : null;
+}
+
+/** [low, high] of the known samples, widened to at least `minRange`. */
+function sampleRange(samples, minRange) {
+    let low = Infinity;
+    let high = -Infinity;
+    for (const v of samples) {
+        if (v === null)
+            continue;
+        if (v < low)
+            low = v;
+        if (v > high)
+            high = v;
+    }
+    if (low === Infinity)
+        return null;
+    if (high - low < minRange) {
+        const mid = (high + low) / 2;
+        low = mid - minRange / 2;
+        high = mid + minRange / 2;
+    }
+    return [low, high];
+}
+
+const NORMAL = () => Level.NORMAL;
+
+/**
+ * Pieces of a line graph in a width × height box (y grows down) from
+ * sampleSeries' columns: one point per column, newest at the right. A piece
+ * is a run of [x, y] points without gaps and with one `level` (from
+ * `levelOf`, applied to the value each step ends on), so a line changes
+ * color where the reading crosses a threshold. A lone column between gaps
+ * is a piece of one point. `minRange` keeps a small wobble from looking
+ * like a cliff. Empty when there is nothing to draw.
+ */
+export function sparklinePieces(samples, width, height, {levelOf = NORMAL, minRange = 0} = {}) {
+    if (!samples || samples.length === 0)
+        return [];
+    const range = sampleRange(samples, minRange);
+    if (!range)
+        return [];
+    const [low, high] = range;
+    const pad = 1;
+    const y = v => (high > low ? pad + (1 - (v - low) / (high - low)) * (height - 2 * pad) : height / 2);
+    const step = width / samples.length;
+
+    const pieces = [];
+    let piece = null; // the piece being built
+    let prev = null; // the previous point of the current run, with its level
+    const endRun = () => {
+        if (piece)
+            pieces.push(piece);
+        else if (prev)
+            pieces.push({points: [prev.point], level: prev.level});
+        piece = null;
+        prev = null;
+    };
+    for (let i = 0; i < samples.length; i++) {
+        const v = samples[i];
+        if (v === null) {
+            endRun();
+            continue;
+        }
+        const point = [(i + 0.5) * step, y(v)];
+        const level = levelOf(v);
+        if (prev && !piece) {
+            piece = {points: [prev.point, point], level};
+        } else if (piece && level !== piece.level) {
+            pieces.push(piece);
+            piece = {points: [prev.point, point], level};
+        } else if (piece) {
+            piece.points.push(point);
+        }
+        prev = {point, level};
+    }
+    endRun();
+    return pieces;
+}
+
+/** How many bars of `barWidth` plus `gap` pixels fit in `width`. */
+export function barSlots(width, barWidth = 3, gap = 1) {
+    return Math.max(1, Math.floor((width + gap) / (barWidth + gap)));
+}
+
+/**
+ * A bar graph in a width × height box (y grows down) from sampleSeries'
+ * columns (sampled with barSlots(width) columns): one bar per column,
+ * newest at the right, each with the `level` of its value. `percent`
+ * readings span 0–100 %; anything else spans its values like a line, with
+ * room below so the lowest bar is still visible. Empty columns draw nothing.
+ */
+export function barPieces(samples, width, height,
+    {levelOf = NORMAL, minRange = 1, percent = false, barWidth = 3, gap = 1} = {}) {
+    if (!samples || samples.length === 0)
+        return [];
+    let low, high;
+    if (percent) {
+        [low, high] = [0, 100];
+    } else {
+        const range = sampleRange(samples, Math.max(minRange, 1e-9));
+        if (!range)
+            return [];
+        [low, high] = range;
+        low -= (high - low) / 3;
+    }
+    const step = barWidth + gap;
+    const left = width - samples.length * step + gap;
+    const bars = [];
+    for (let slot = 0; slot < samples.length; slot++) {
+        const v = samples[slot];
+        if (v === null)
+            continue;
+        const fraction = Math.max(0, Math.min(1, (v - low) / (high - low)));
+        const h = Math.max(1, Math.round(fraction * height));
+        bars.push({x: left + slot * step, y: height - h, width: barWidth, height: h, level: levelOf(v)});
+    }
+    return bars;
+}
