@@ -295,7 +295,7 @@ test('guest stopped: running to anything else, named, once per transition', () =
     assert.match(out[0].body, /101/);
     assert.match(out[0].body, /home/);
     // Running again, then stopping again is a new transition.
-    const again = notes(run(e, [g(['home', 101, 'web', 'running']), g(['home', 101, 'web', 'paused'])], s, 10, 100));
+    const again = notes(run(e, [g(['home', 101, 'web', 'running']), g(['home', 101, 'web', 'stopped'])], s, 10, 100));
     assert.equal(again.length, 1);
 });
 
@@ -309,6 +309,23 @@ test('guest stopped: a guest that was never running does not alert', () => {
     const s = only({...stopped});
     const out = run(new AlertEngine(), [g(['home', 5, 'x', 'stopped']), g(['home', 5, 'x', 'paused'])], s);
     assert.equal(out.length, 0);
+});
+
+test('guest stopped: running to paused is silent, paused to stopped alerts', () => {
+    const s = only(stopped);
+    const e = new AlertEngine();
+    assert.equal(run(e, [g(['home', 7, 'vm', 'running']), g(['home', 7, 'vm', 'paused'])], s).length, 0);
+    const out = notes(run(e, [g(['home', 7, 'vm', 'paused']), g(['home', 7, 'vm', 'stopped'])], s, 10, 100));
+    assert.equal(out.length, 1);
+    assert.match(out[0].title, /vm stopped/);
+    assert.match(out[0].body, /from paused to stopped/);
+});
+
+test('guest stopped: paused to another non-running state alerts, paused to running does not', () => {
+    const s = only(stopped);
+    const odd = notes(run(new AlertEngine(), [g(['home', 7, 'vm', 'paused']), g(['home', 7, 'vm', 'unknown'])], s));
+    assert.equal(odd.length, 1);
+    assert.equal(run(new AlertEngine(), [g(['home', 7, 'vm', 'paused']), g(['home', 7, 'vm', 'running'])], s).length, 0);
 });
 
 test('guest stopped: list filter uses server/vmid and does not mix servers', () => {

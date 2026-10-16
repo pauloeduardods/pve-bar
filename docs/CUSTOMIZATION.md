@@ -231,7 +231,7 @@ signals, no timers.
 | Host RAM | on, 95 % for 120 s | `node/*/mem` | < limit − 5 |
 | Host disk | on, 90 % | `node/*/disk` ≥ limit (no hold) | < limit − 2 |
 | Server unreachable | on, 120 s | a server's state is not `ok` for the hold time | `ok` again |
-| Guest stopped | off; list of watched guests (`server/vmid`), empty = all running ones | a guest goes from `running` to anything else | it is running again |
+| Guest stopped | off; list of watched guests (`server/vmid`), empty = all running ones | a guest goes from `running` or `paused` to a state that is neither (pausing alone is silent) | it is running again |
 | Guest started | off | a guest goes to `running` | — |
 
 The first snapshot after connecting is never a transition. Each alert names

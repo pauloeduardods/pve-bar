@@ -228,9 +228,13 @@ export class AlertEngine {
             if (before === undefined || before === g.status)
                 continue;
             const name = g.name || String(g.vmid);
-            if (before === 'running' && s.stoppedEnabled && (list.length === 0 || list.includes(id))) {
+            // Paused is deliberate: running -> paused is silent, but a guest that
+            // then stops (paused -> stopped) or dies is the "stopped" alert.
+            const wasUp = before === 'running' || before === 'paused';
+            if (wasUp && g.status !== 'running' && g.status !== 'paused'
+                && s.stoppedEnabled && (list.length === 0 || list.includes(id))) {
                 actions.push(notify(`${name} stopped`,
-                    `Guest ${name} (${g.vmid}) on ${g.server} went from running to ${g.status}.`));
+                    `Guest ${name} (${g.vmid}) on ${g.server} went from ${before} to ${g.status}.`));
             } else if (g.status === 'running' && s.startedEnabled) {
                 actions.push(notify(`${name} started`,
                     `Guest ${name} (${g.vmid}) on ${g.server} is running.`));
