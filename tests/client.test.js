@@ -455,3 +455,43 @@ test('destroy unwatches every guest it watched', async () => {
     client.destroy();
     assert.deepEqual(watchCalls(), ['Watch home/100', 'Unwatch home/100']);
 });
+
+test('a longer span for held keys fetches again and merges in front of the local series', async () => {
+    const {client} = start();
+    const cpu = 'home/node/pve/cpu';
+    client.setHistoryKeys([cpu], 300);
+    globalThis.FAKE_BUS.history = {[cpu]: [[3000, 400, 200, 0], [1, 2, 3, 4]]};
+    globalThis.FAKE_BUS.appear();
+    await tick();
+    await tick();
+    assert.deepEqual(series(client, cpu), [[-400, 2], [-200, 3], [0, 4]]);
+    client.setHistoryKeys([cpu], 300);
+    client.setHistoryKeys([cpu], 100);
+    assert.equal(methods().filter(m => m === 'GetHistory').length, 1, 'same or shorter span: nothing');
+    globalThis.FAKE_BUS.holdCalls = true;
+    globalThis.FAKE_BUS.history = {[cpu]: [[3000, 400, 200, 10], [1, 2, 3, 4]]};
+    client.setHistoryKeys([cpu], 3600);
+    assert.equal(methods().filter(m => m === 'GetHistory').length, 2, 'longer span: fetched again');
+    assert.deepEqual(globalThis.FAKE_BUS.calls.at(-1).params, [[cpu]]);
+    globalThis.FAKE_NOW_US += 5 * S;
+    globalThis.FAKE_BUS.proxy.emitUpdated({[cpu]: 9});
+    globalThis.FAKE_BUS.pending.shift()();
+    await tick();
+    assert.deepEqual(series(client, cpu), [[-3000, 1], [-400, 2], [-200, 3], [-10, 4], [0, 9]],
+        'older points in front, the point appended in flight kept');
+    client.setHistoryKeys([cpu], 3600);
+    client.setHistoryKeys([cpu], 600);
+    assert.equal(methods().filter(m => m === 'GetHistory').length, 2, 'covered span: no refetch');
+});
+
+test('API 1 pved: a longer span does not call GetHistory', async () => {
+    const {client} = start();
+    globalThis.FAKE_BUS.props.ApiVersion = 1;
+    client.setHistoryKeys(['home/node/pve/cpu'], 300);
+    globalThis.FAKE_BUS.appear();
+    await tick();
+    await tick();
+    client.setHistoryKeys(['home/node/pve/cpu'], 100);
+    client.setHistoryKeys(['home/node/pve/cpu'], 3600);
+    assert.equal(methods().includes('GetHistory'), false);
+});

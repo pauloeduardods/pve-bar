@@ -133,6 +133,8 @@ export class PveClient {
         // History: key -> {t: [µs], v: [value, NaN for a gap]}, for the wanted keys only.
         this._historyKeys = new Set();
         this._history = new Map();
+        // key -> the span (µs) its series is known to cover; a longer wanted span refetches it.
+        this._covered = new Map();
         this._spanUs = HISTORY_MAX_S * 1e6;
         // Guests watched: "server/vmid" -> {server, vmid, count}.
         this._watches = new Map();
@@ -182,8 +184,10 @@ export class PveClient {
     /**
      * The value keys whose history the caller draws, and the longest span it
      * draws in seconds (at most an hour). New keys are fetched once with
-     * GetHistory; keys no longer wanted are dropped. Calling it again with
-     * the same keys does nothing.
+     * GetHistory; keys no longer wanted are dropped. Keys already held are
+     * fetched again only when the span now asked exceeds what their series
+     * covers (an earlier shorter span trimmed it). Calling it again with
+     * the same keys and span does nothing.
      */
     setHistoryKeys(keys, spanS = HISTORY_MAX_S) {
         if (!this._keepHistory)
@@ -197,6 +201,7 @@ export class PveClient {
             if (!wanted.has(key)) {
                 this._historyKeys.delete(key);
                 this._history.delete(key);
+                this._covered.delete(key);
             }
         }
         const added = [];
@@ -210,9 +215,17 @@ export class PveClient {
             const cutoff = nowUs() - spanUs;
             for (const series of this._history.values())
                 trim(series, cutoff);
+            for (const [key, covered] of this._covered)
+                this._covered.set(key, Math.min(covered, spanUs));
         }
-        if (added.length > 0 && this._ready)
-            this._loadHistory(added, this._generation);
+        const stale = [];
+        for (const key of wanted) {
+            if (!added.includes(key) && (this._covered.get(key) ?? 0) < spanUs)
+                stale.push(key);
+        }
+        const fetch = [...added, ...stale];
+        if (fetch.length > 0 && this._ready)
+            this._loadHistory(fetch, this._generation);
     }
 
     /** Starts the series of `keys` from the current values (step semantics). */
@@ -234,8 +247,12 @@ export class PveClient {
         const sent = nowUs();
         this._seed(keys, sent);
         const api = proxy?.get_cached_property('ApiVersion')?.deepUnpack();
-        if (!proxy || (typeof api === 'number' && api < 2))
+        if (!proxy || (typeof api === 'number' && api < 2)) {
+            // Nothing older exists to fetch: do not ask again for this span.
+            for (const key of keys)
+                this._covered.set(key, this._spanUs);
             return;
+        }
         let reply;
         try {
             reply = dictFrom(await this._call(proxy, 'GetHistory',
@@ -250,8 +267,11 @@ export class PveClient {
         const now = nowUs();
         let loaded = false;
         for (const key of keys) {
+            if (!this._historyKeys.has(key))
+                continue;
+            this._covered.set(key, this._spanUs); // pved answered: it has nothing older to give
             const entry = reply[key];
-            if (!this._historyKeys.has(key) || !Array.isArray(entry))
+            if (!Array.isArray(entry))
                 continue;
             const [ages, values] = entry;
             if (!Array.isArray(ages) || !Array.isArray(values))
@@ -429,6 +449,7 @@ export class PveClient {
         this._dropProxy();
         this._values = new Map();
         this._history = new Map();
+        this._covered = new Map();
         this._fresh = null;
         this._ready = false;
         this._setDaemon('not-running');
