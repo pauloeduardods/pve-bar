@@ -16,7 +16,7 @@ export default class PveBarPreferences extends ExtensionPreferences {
         const daemon = new DaemonLink();
         const layout = new LayoutPage(settings, window, this.path, daemon);
         window.add(layout.page);
-        window.add(generalPage(settings));
+        window.add(generalPage(settings, daemon));
         window.add(thresholdsPage(settings));
         window.add(alertsPage(settings, daemon));
         window.connect('close-request', () => {
