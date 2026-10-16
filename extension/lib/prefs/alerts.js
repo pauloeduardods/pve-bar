@@ -4,8 +4,13 @@ import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 
-/** Builds the Adw.PreferencesPage for the alert settings. */
-export function alertsPage(settings) {
+import {guestFilterRow} from './guestPicker.js';
+
+/**
+ * Builds the Adw.PreferencesPage for the alert settings. `daemon` (the
+ * window's DaemonLink, optional) lists the guests to pick from.
+ */
+export function alertsPage(settings, daemon = null) {
     const page = new Adw.PreferencesPage({title: 'Alerts', icon_name: 'preferences-system-notifications-symbolic'});
 
     const host = new Adw.PreferencesGroup({
@@ -31,8 +36,7 @@ export function alertsPage(settings) {
     const guests = new Adw.PreferencesGroup({title: 'Guests'});
     guests.add(switchRow(settings, 'alert-guest-stopped', 'A guest stops',
         'Only guests that were running when pve-bar saw them.'));
-    guests.add(listRow(settings, 'alert-guests', 'Only these guests (server/vmid, comma separated)',
-        'e.g. home/101, lab/200. Empty = every guest.'));
+    guests.add(guestFilterRow(settings, 'alert-guests', daemon, 'Only these guests'));
     guests.add(switchRow(settings, 'alert-guest-started', 'A guest starts'));
     page.add(guests);
 
@@ -67,11 +71,3 @@ function spinRow(settings, key, title, subtitle, min, max) {
     return row;
 }
 
-/** A string-array key edited as comma separated text. */
-function listRow(settings, key, title, tooltip) {
-    const row = new Adw.EntryRow({title, text: settings.get_strv(key).join(', ')});
-    row.tooltip_text = tooltip;
-    row.connect('changed', () => settings.set_strv(key,
-        row.text.split(',').map(x => x.trim()).filter(Boolean)));
-    return row;
-}
