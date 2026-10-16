@@ -6,12 +6,15 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+import {alertsPage} from './lib/prefs/alerts.js';
+
 export default class PveBarPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
         window.set_default_size(640, 720);
         window.add(this._panelPage(settings));
         window.add(this._colorsPage(settings));
+        window.add(alertsPage(settings));
     }
 
     // ------------------------------------------------------------ pages
