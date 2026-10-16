@@ -88,6 +88,22 @@ Run `pvectl setup NAME` again to change a server (Enter keeps each value), and `
 
 The Proxmox API has no temperatures. To show them, install pve-temp-agent on each host: it is a 500 KB static binary with no dependencies, sandboxed by systemd, that serves `/sys/class/hwmon` readings behind its own token. Follow [deploy/pve-temp-agent/README.md](deploy/pve-temp-agent/README.md), then run `pvectl setup NAME` again and give it the agent URL and token.
 
+## Customizing the bar
+
+The bar is a list of segments stored as JSON in the `panel-layout` setting. Each segment reads one target (the selected node, a given node, a guest, or a whole server), shows one or more readings through a template, and can draw a graph of the last 5, 15, 30 or 60 minutes:
+
+```
+ [▣ 23% ╱╲╱] [▤ 61% ▁▃▅] [♨ 54°] [▭ web · 6% · 45%] [▤ home 2/3 · 23%]
+```
+
+- **Readings**: node `cpu`, `mem`, `mem-used`, `mem-total`, `disk`, `temp`, `status`, `name`; guest `cpu`, `mem`, `name`, `status`, `netin`, `netout`, `fs` (disk inside the VM, needs the QEMU guest agent); server `running`, `guests`, `state`, `name`, `cpu`, `mem`.
+- **Templates**: `{cpu}% · {temp}°`, `{cpu:1}` for one decimal, `{{` and `}}` for braces. A mistake shows `--` instead of breaking the bar; a target that no longer exists shows `--`.
+- **Graphs**: line, area or bars, 30, 45 or 70 px wide, in the warm/hot colors of their thresholds or one fixed color. History comes from pved (one call when the extension connects, then every update is appended), so graphs cost no polling.
+- **Presets**: Minimal, Default, Graphs and Cluster (one segment per server).
+- Thresholds: `cpu-*`, `mem-*`, `disk-*`, `temp-*` and `fs-*` (`-warm` and `-hot`).
+
+On the first start after an upgrade, the layout is built once from the older `server`, `node` and `show-icons` settings, so the bar looks the same. Details are in [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md). To look at the bar without GNOME Shell: `gjs -m tools/render-bar.js bar.png`.
+
 ## Alerts
 
 pve-bar sends a GNOME notification (source "pve-bar") when something needs attention. Settings: Extensions, pve-bar, Alerts, which also has a **Test notification** button. Each alert names the server and the node or guest, and fires once per episode.

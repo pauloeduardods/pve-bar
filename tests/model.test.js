@@ -3,9 +3,10 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    Level, formatGiB, formatMemory, formatPercent, formatTemp, guestRows, guestSetKey,
-    guestSummary, groupByServer, level, nodeSummary, nodeValue, pickNode, pickServer,
-    sanitizeThresholds, sectionKey, serverIdsKey, stateBadge, statusInfo, worstLevel,
+    GRAPH_WIDTHS, Level, barPieces, barSlots, formatGiB, graphNeedsRepaint, formatMemory, formatPercent, formatRate, formatTemp,
+    guestRows, guestSetKey, guestSummary, groupByServer, level, nodeSummary, nodeValue, parseColor, pickNode,
+    pickServer, sampleSeries, sanitizeThresholds, sectionKey, serverIdsKey, sparklinePieces, stateBadge,
+    statusInfo, worstLevel,
 } from '../extension/lib/model.js';
 
 test('levels respect thresholds, even inverted ones', () => {
@@ -165,4 +166,121 @@ test('guestRows and summary', () => {
     assert.equal(old.usage, '');
     assert.equal(guestSummary(GUESTS), '1 running / 3');
     assert.equal(guestRows([{...GUESTS[0]}], new Map())[0].usage, '-- · --');
+});
+
+// ---- rates and colors ----------------------------------------------------------
+
+test('rates scale from B/s to GB/s', () => {
+    assert.equal(formatRate(512), '512 B/s');
+    assert.equal(formatRate(999), '999 B/s');
+    assert.equal(formatRate(1000), '1.0 KB/s');
+    assert.equal(formatRate(1536), '1.5 KB/s');
+    assert.equal(formatRate(1536, 2), '1.50 KB/s');
+    assert.equal(formatRate(12.3 * 1024 ** 2), '12 MB/s');
+    assert.equal(formatRate(5 * 1024 ** 3), '5.0 GB/s');
+    assert.equal(formatRate(-3), '0 B/s');
+    assert.equal(formatRate(null), '--');
+    assert.equal(formatRate(NaN), '--');
+});
+
+test('colors parse for Cairo; anything else is the theme color', () => {
+    assert.deepEqual(parseColor('#fff'), [1, 1, 1]);
+    assert.deepEqual(parseColor('#FF0000'), [1, 0, 0]);
+    assert.deepEqual(parseColor(' rgb(255, 0, 0) '), [1, 0, 0]);
+    assert.deepEqual(parseColor('rgba(0,0,255,0.5)'), [0, 0, 1]);
+    assert.equal(parseColor(''), null);
+    assert.equal(parseColor('tomato'), null);
+    assert.equal(parseColor(null), null);
+    assert.deepEqual(GRAPH_WIDTHS, {narrow: 30, medium: 45, wide: 70});
+});
+
+// ---- history sampling and graphs ----------------------------------------------
+
+const S = 1e6;
+const steps = (pairs) => ({t: pairs.map(([t]) => t * S), v: pairs.map(([, v]) => v)});
+
+test('sampleSeries: step values per column, gaps and the time before the first point are null', () => {
+    const now = 100 * S;
+    assert.deepEqual(sampleSeries(steps([[5, 10], [45, NaN], [65, 30], [85, 20]]), now, 100, 5),
+        [10, 10, 10, 30, 30]);
+    assert.deepEqual(sampleSeries(steps([[5, 10], [25, NaN], [75, 40]]), now, 100, 5), [10, 10, null, 40, 40]);
+    assert.deepEqual(sampleSeries(steps([[50, 7]]), now, 100, 5), [null, null, 7, 7, 7]);
+    assert.deepEqual(sampleSeries(steps([[-500, 7]]), now, 100, 5), [7, 7, 7, 7, 7], 'a value holds until the next');
+});
+
+test('sampleSeries keeps a short spike and ignores the future', () => {
+    const now = 100 * S;
+    assert.deepEqual(sampleSeries(steps([[0, 10], [41, 90], [42, 10]]), now, 100, 5), [10, 10, 90, 10, 10]);
+    assert.deepEqual(sampleSeries(steps([[0, 10], [150, 99]]), now, 100, 5), [10, 10, 10, 10, 10]);
+});
+
+test('sampleSeries: nothing to draw is null; the output array can be reused', () => {
+    const now = 100 * S;
+    assert.equal(sampleSeries(null, now, 100, 5), null);
+    assert.equal(sampleSeries(steps([]), now, 100, 5), null);
+    assert.equal(sampleSeries(steps([[0, NaN]]), now, 100, 5), null);
+    assert.equal(sampleSeries(steps([[0, 1]]), now, 100, 0), null);
+    const out = new Array(5);
+    assert.equal(sampleSeries(steps([[0, 1]]), now, 100, 5, out), out);
+    assert.notEqual(sampleSeries(steps([[0, 1]]), now, 100, 4, out), out, 'wrong size: a new array');
+});
+
+test('a graph repaints when its series got a value or a column of time passed', () => {
+    // 900 s over 30 px: one column is 30 s.
+    const last = 1000 * S;
+    assert.equal(graphNeedsRepaint(last, last + 29 * S, 900, 30, false), false, 'less than a column');
+    assert.equal(graphNeedsRepaint(last, last + 30 * S, 900, 30, false), true, 'a column passed');
+    assert.equal(graphNeedsRepaint(last, last + 1 * S, 900, 30, true), true, 'its series got a value');
+    assert.equal(graphNeedsRepaint(0, last, 900, 30, false), true, 'never painted');
+    assert.equal(graphNeedsRepaint(null, last, 900, 30, false), true);
+    assert.equal(graphNeedsRepaint(last, last + 10 * S, 300, 30, false), true, '300 s / 30 px: 10 s');
+    assert.equal(graphNeedsRepaint(last, last + 9 * S, 300, 30, false), false);
+    assert.equal(graphNeedsRepaint(last, last + 1e9 * S, 900, 0, false), false, 'no columns: nothing to scroll');
+});
+
+test('line pieces: one point per column, split at gaps', () => {
+    assert.deepEqual(sparklinePieces([10, 20, null, 30], 40, 10), [
+        {points: [[5, 9], [15, 5]], level: Level.NORMAL},
+        {points: [[35, 1]], level: Level.NORMAL},
+    ]);
+    assert.deepEqual(sparklinePieces(null, 40, 10), []);
+    assert.deepEqual(sparklinePieces([null, null], 40, 10), []);
+});
+
+test('line pieces change color where the reading crosses a threshold', () => {
+    const levelOf = v => (v >= 90 ? Level.HOT : v >= 50 ? Level.WARM : Level.NORMAL);
+    const pieces = sparklinePieces([10, 50, 90, 95], 40, 10, {levelOf});
+    assert.deepEqual(pieces.map(p => p.level), [Level.WARM, Level.HOT]);
+    assert.equal(pieces[0].points.length, 2);
+    assert.deepEqual(pieces[1].points[0], pieces[0].points[1], 'pieces join');
+    assert.equal(pieces[1].points.length, 3);
+});
+
+test('line pieces never draw a small wobble as a cliff', () => {
+    const [flat] = sparklinePieces([50, 50], 20, 10, {minRange: 20});
+    assert.deepEqual(flat.points.map(([, y]) => y), [5, 5]);
+    const [wobble] = sparklinePieces([50, 51], 20, 10, {minRange: 20});
+    assert.ok(Math.abs(wobble.points[0][1] - wobble.points[1][1]) < 1);
+});
+
+test('bars: one per column, newest at the right, percent spans 0–100 %', () => {
+    assert.equal(barSlots(15), 4);
+    assert.deepEqual([barSlots(30), barSlots(45), barSlots(70), barSlots(1)], [7, 11, 17, 1]);
+    assert.deepEqual(barPieces([50, null, 100, 20], 15, 10, {percent: true}), [
+        {x: 0, y: 5, width: 3, height: 5, level: Level.NORMAL},
+        {x: 8, y: 0, width: 3, height: 10, level: Level.NORMAL},
+        {x: 12, y: 8, width: 3, height: 2, level: Level.NORMAL},
+    ]);
+    assert.deepEqual(barPieces(null, 15, 10), []);
+    assert.deepEqual(barPieces([null], 15, 10), []);
+});
+
+test('bars keep a visible floor and take their level from the value', () => {
+    const levelOf = v => (v >= 90 ? Level.HOT : Level.NORMAL);
+    const bars = barPieces([60, 95], 7, 12, {levelOf});
+    assert.equal(bars.length, 2);
+    assert.ok(bars[0].height >= 1 && bars[0].height < bars[1].height);
+    assert.equal(bars[1].height, 12);
+    assert.deepEqual(bars.map(b => b.level), [Level.NORMAL, Level.HOT]);
+    assert.ok(bars.every(b => b.y + b.height === 12), 'bars stand on the bottom');
 });

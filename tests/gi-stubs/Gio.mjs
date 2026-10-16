@@ -4,12 +4,35 @@
 //   appear() / vanish()        pved claims or loses its name
 //   props[name]                 cached property values
 //   values                      what GetValues returns (object)
+//   history                     key -> [ages, values]: what GetHistory knows
 //   proxy                       the proxy the client created
 //   calls                       method calls made through the proxy
 //   holdCalls / pending         park method replies; call pending.shift()() to deliver
 //   callError                   GLib.Error the next call fails with
+//   callErrors[method]          GLib.Error every call of that method fails with
 //   failProxies                 make proxy creation fail
 import GLib from './GLib.mjs';
+
+/** What pved answers to `method` called with the unpacked `args`. */
+function replyFor(bus, method, args) {
+    switch (method) {
+    case 'GetValues':
+        return new GLib.Variant('(a{sd})', [{...bus.values}]);
+    case 'GetHistory': {
+        const [keys] = args;
+        const known = bus.history ?? {};
+        const wanted = keys.length ? keys : Object.keys(known);
+        const out = {};
+        for (const key of wanted) {
+            if (known[key])
+                out[key] = known[key];
+        }
+        return new GLib.Variant('(a{s(adad)})', [out]);
+    }
+    default:
+        return new GLib.Variant('()', []);
+    }
+}
 
 class FakeProxy {
     constructor() {
@@ -47,10 +70,12 @@ class FakeProxy {
 
     call(method, params, _flags, timeout, _cancellable, callback) {
         const bus = globalThis.FAKE_BUS;
-        bus.calls.push({method, params, timeout});
-        const error = bus.callError;
+        bus.calls.push({method, params: params?.deepUnpack() ?? null, timeout});
+        const error = bus.callError ?? bus.callErrors?.[method] ?? null;
         bus.callError = null;
-        const reply = {error, reply: new GLib.Variant('(a{sd})', [{...bus.values}])};
+        const reply = {error, reply: replyFor(bus, method, params?.deepUnpack())};
+        if (!callback)
+            return; // fire and forget
         const deliver = () => callback(this, reply);
         if (bus.holdCalls)
             bus.pending.push(deliver);

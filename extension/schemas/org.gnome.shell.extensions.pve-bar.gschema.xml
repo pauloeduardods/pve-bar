@@ -8,6 +8,13 @@
 
     <key name="show-icons" type="b"><default>true</default><summary>Show icons</summary></key>
 
+    <!-- The top-bar layout (lib/layout.js); '' = build it once from the settings above -->
+    <key name="panel-layout" type="s">
+      <default>''</default>
+      <summary>Top-bar layout (JSON)</summary>
+      <description>Segments, their targets, templates and graphs. Edited in Settings → Layout. Empty on a fresh install: the extension then stores the layout the server, node and show-icons settings describe.</description>
+    </key>
+
     <!-- Placement -->
     <key name="panel-position" type="s">
       <choices><choice value="left"/><choice value="center"/><choice value="right"/></choices>
@@ -23,6 +30,10 @@
     <key name="mem-hot" type="i"><range min="1" max="110"/><default>95</default><summary>RAM %: hot from</summary></key>
     <key name="temp-warm" type="i"><range min="30" max="110"/><default>70</default><summary>Temperature (°C): warm from</summary></key>
     <key name="temp-hot" type="i"><range min="30" max="110"/><default>85</default><summary>Temperature (°C): hot from</summary></key>
+    <key name="disk-warm" type="i"><range min="1" max="110"/><default>80</default><summary>Node root disk %: warm from</summary></key>
+    <key name="disk-hot" type="i"><range min="1" max="110"/><default>90</default><summary>Node root disk %: hot from</summary></key>
+    <key name="fs-warm" type="i"><range min="1" max="110"/><default>80</default><summary>Disk inside a guest %: warm from</summary></key>
+    <key name="fs-hot" type="i"><range min="1" max="110"/><default>90</default><summary>Disk inside a guest %: hot from</summary></key>
 
     <!-- Colours (any CSS colour; empty = theme colour) -->
     <key name="color-normal" type="s"><default>''</default><summary>Normal color</summary></key>

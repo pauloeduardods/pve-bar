@@ -118,12 +118,22 @@ server). Targets that no longer exist render `--` (and their graphs nothing).
 | node | `disk` | `{disk}%` | `node/<n>/disk` | disk |
 | node | `temp` | `{temp}°` | `node/<n>/temp` | temp |
 | node | `status` | `{status}` | — | server |
+| node | `name` | `{name}` | — | server |
 | guest | `cpu`, `mem` | as above | `guest/<id>/cpu`, `mem` | cpu, ram |
 | guest | `name`, `status` | `{name}`, `{status}` | — | vm |
 | guest | `netin`, `netout` | `{netin}` (auto B/s, KB/s, MB/s) | `guest/<id>/netin` | net |
 | guest | `fs` | `{fs}%` | `guest/<id>/fs` | disk |
 | server | `running` | `{running}/{guests}` | — | server |
 | server | `state` | `{state}` | — | server |
+| server | `name` | `{name}` | — | server |
+| server | `cpu`, `mem` | `{cpu}%`, `{mem}%` | of the node a `""` node would pick | cpu, ram |
+
+`{guests}` is a placeholder of the `running` reading, not a reading of its
+own. Node `name` and server `name`, `cpu`, `mem` were added during lane B so
+the Cluster preset can name its servers and show their CPU. A missing `temp`
+or `fs` value hides that reading from a merged segment (and a segment made
+only of it); every other missing value shows `--`. Readings only merge into
+a segment with the same target.
 
 Guest details (`netin`, `netout`, `fs`, `uptime`) exist only while the
 guest is watched; a segment that uses them makes the extension `Watch` that
@@ -139,28 +149,37 @@ value are dropped, at most 12 segments × 8 readings, 200-char templates,
 ```json
 {"version": 1, "segments": [
   {"target": {"server": "", "node": ""}, "items": ["cpu"], "template": "", "icon": "auto",
-   "graph": {"reading": "cpu", "kind": "line", "only": false, "width": "narrow", "window": 600, "color": "follow"}},
+   "graph": {"reading": "cpu", "kind": "line", "only": false, "width": "narrow", "window": 900, "color": "follow"}},
   {"target": {"server": "", "node": ""}, "items": ["mem", "temp"], "template": "{mem}% · {temp}°", "icon": "auto", "graph": null}
 ]}
 ```
 
-- `graph.kind`: `line`, `area`, `bars`. `graph.window`: 300, 900, 1800 or 3600
-  s. `graph.width`: `narrow` 30, `medium` 45, `wide` 70 px. `graph.color`:
-  `follow` (threshold colors on the line, as helios) or `#rrggbb`.
+- `graph.kind`: `line`, `area`, `bars`. `graph.window`: 300, 900 (default),
+  1800 or 3600 s; other numbers snap to the nearest. `graph.width`: `narrow`
+  30, `medium` 45 (default), `wide` 70 px. `graph.color`: `follow` (threshold
+  colors on the line, as helios) or `#rrggbb`.
 - Thresholds per reading kind (cpu, mem, disk, temp, fs) come from the
   existing `*-warm`/`*-hot` keys plus new `disk-*` and `fs-*`.
 - **Migration:** `panel-layout` defaults to `''`; on first run it is built
   once from the MVP settings (`server`, `node`, `show-icons`, thresholds:
-  segments CPU, RAM, temperature of the selected node) and stored.
+  segments CPU, RAM, temperature of the selected node) and stored. The
+  segments keep `""` targets, so the `server` and `node` settings and the
+  thresholds go on working as they did.
 - **Presets:** Minimal (CPU · RAM in one segment), Default (MVP look), Graphs
   (CPU line + RAM area + temperature), Cluster (one compact segment per
-  server: `{running}/{guests}` + CPU of its first node), with Undo.
+  server: `{running}/{guests} · {cpu}%`, prefixed by `{name}` when there is
+  more than one server), with Undo (`applyPreset` returns the layout to go
+  back to; `UndoStack` keeps several).
 - **Import/export** as JSON (functions here; file dialogs in lane C).
 
 ### Drawing (`extension/lib/draw.js`)
 
 Port helios' Cairo helpers (`paintPieces`, `paintBars`); bar graphs in
 `St.DrawingArea`, repainted only when one of their series got a value.
+On every client change (each `Updated`), a graph also repaints when at least
+one column of time (`window` s / its columns) has passed since its last
+paint (`graphNeedsRepaint` in `model.js`), so a flat series still scrolls
+and an old spike leaves the window, with no timer.
 
 ## 4. Layout editor (lane C, after lane B)
 

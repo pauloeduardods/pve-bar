@@ -18,5 +18,11 @@ class Variant {
     }
 }
 
-const GLib = {Error: GLibError, Variant, VariantType: class {}};
+const GLib = {
+    Error: GLibError,
+    Variant,
+    VariantType: class {},
+    // Tests move time with globalThis.FAKE_NOW_US.
+    get_monotonic_time: () => globalThis.FAKE_NOW_US ?? 0,
+};
 export default GLib;

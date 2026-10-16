@@ -11,6 +11,11 @@
     icon-size: 14px;
 }
 
+/* A segment's graph; its width comes from the layout (30, 45 or 70 px). */
+.pve-bar-graph {
+    height: 16px;
+}
+
 .pve-bar-menu-value {
     font-weight: bold;
 }
