@@ -22,6 +22,7 @@ Usage: pvectl <command> [options]
 
 Commands:
   status [--json] [NAME]   show every server (or just NAME): nodes and guests
+  status --watch [NAME]    the same every 10 s, with graphs of the last minutes
   doctor [NAME]            check the setup and suggest fixes
   setup NAME               add or edit the server NAME (interactive)
   remove NAME              forget the server NAME and its secrets
@@ -35,10 +36,20 @@ Servers live in ~/.config/pve-bar/pved.conf; their tokens in the GNOME Keyring."
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
-    Status { json: bool, server: Option<String> },
-    Doctor { server: Option<String> },
-    Setup { server: String },
-    Remove { server: String },
+    Status {
+        json: bool,
+        watch: bool,
+        server: Option<String>,
+    },
+    Doctor {
+        server: Option<String>,
+    },
+    Setup {
+        server: String,
+    },
+    Remove {
+        server: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,6 +66,7 @@ enum Parsed {
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> {
     let mut config = None;
     let mut json = false;
+    let mut watch = false;
     let mut words = Vec::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -63,6 +75,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> 
                 config = Some(PathBuf::from(args.next().ok_or("--config needs a value")?))
             }
             "--json" => json = true,
+            "--watch" => watch = true,
             "-h" | "--help" => return Ok(Parsed::Print(format!("{USAGE}\n"))),
             "-V" | "--version" => {
                 return Ok(Parsed::Print(format!(
@@ -80,12 +93,19 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> 
     if let Some(extra) = words.next() {
         return Err(format!("unexpected argument: {extra}"));
     }
-    if json && verb != "status" {
-        return Err("--json only applies to status".to_owned());
+    if (json || watch) && verb != "status" {
+        return Err("--json and --watch only apply to status".to_owned());
+    }
+    if json && watch {
+        return Err("--json and --watch do not go together".to_owned());
     }
     let need_name = |name: Option<String>| name.ok_or(format!("{verb} needs a server NAME"));
     let command = match verb.as_str() {
-        "status" => Command::Status { json, server: name },
+        "status" => Command::Status {
+            json,
+            watch,
+            server: name,
+        },
         "doctor" => Command::Doctor { server: name },
         "setup" => Command::Setup {
             server: need_name(name)?,
@@ -184,9 +204,11 @@ async fn remove(config_path: &std::path::Path, name: &str) -> Result<(), String>
 
 async fn run(options: Options) -> Result<ExitCode, String> {
     match options.command {
-        Command::Status { json, server } => {
-            status::run(&options.config, server.as_deref(), json).await
-        }
+        Command::Status {
+            json,
+            watch,
+            server,
+        } => status::run(&options.config, server.as_deref(), json, watch).await,
         Command::Doctor { server } => doctor::run(&options.config, server.as_deref()).await,
         Command::Setup { server } => setup::run(&options.config, &server).await,
         Command::Remove { server } => remove(&options.config, &server)
@@ -243,6 +265,7 @@ mod tests {
             parse(&["status"]),
             Ok(Command::Status {
                 json: false,
+                watch: false,
                 server: None
             })
         );
@@ -250,7 +273,16 @@ mod tests {
             parse(&["status", "--json", "home"]),
             Ok(Command::Status {
                 json: true,
+                watch: false,
                 server: Some("home".into())
+            })
+        );
+        assert_eq!(
+            parse(&["status", "--watch"]),
+            Ok(Command::Status {
+                json: false,
+                watch: true,
+                server: None
             })
         );
         assert_eq!(parse(&["doctor"]), Ok(Command::Doctor { server: None }));
@@ -273,6 +305,8 @@ mod tests {
         assert!(parse(&[]).is_err());
         assert!(parse(&["setup"]).is_err());
         assert!(parse(&["doctor", "--json"]).is_err());
+        assert!(parse(&["doctor", "--watch"]).is_err());
+        assert!(parse(&["status", "--watch", "--json"]).is_err());
         assert!(parse(&["status", "a", "b"]).is_err());
         assert!(parse(&["frobnicate"]).is_err());
         assert!(parse(&["status", "--bogus"]).is_err());

@@ -12,7 +12,7 @@ pve-bar only reads. It never starts, stops or changes anything in Proxmox.
 
 ## How it fits together
 
-- **pved**: a small service in your session (`systemd --user`). Every 10 s it makes one `GET /cluster/resources` call per server, rounds the numbers to what the panel shows, and publishes only what changed on the session D-Bus. It uses about 5 MB of RAM and no measurable CPU.
+- **pved**: a small service in your session (`systemd --user`). Every 10 s it makes one `GET /cluster/resources` call per server, rounds the numbers to what the panel shows, and publishes only what changed on the session D-Bus. It keeps the last hour of every value for the graphs and, while you look at a guest, fetches its details. It uses 6 to 9 MB of RAM and under 0.1 % of one core ([measured](docs/FOOTPRINT.md)).
 - **pvectl**: the command line (`pvectl setup`, `status`, `doctor`).
 - **The GNOME extension**: draws what pved publishes. It never touches the network, files or timers itself. Without pved it shows `pve off`.
 - **pve-temp-agent** (optional): a tiny program on the Proxmox host that serves its temperatures, since the Proxmox API does not. See [deploy/pve-temp-agent](deploy/pve-temp-agent/README.md).
@@ -125,10 +125,11 @@ Nothing fires for the state found when pve-bar connects, and a missing reading (
 pvectl status            # every server: nodes and guests
 pvectl status home       # one server
 pvectl status --json     # machine-readable
+pvectl status --watch    # redraw every 10 s, with graphs of the last 5 minutes
 pvectl doctor            # check config, keyring, TLS, token, privileges, agent, pved, extension
 ```
 
-`status` and `doctor` talk to Proxmox directly with the same config and keyring, so they work without pved. `doctor` only reads; when something is wrong it prints what to run. It exits with 1 when something needs attention.
+`status` and `doctor` talk to Proxmox directly with the same config and keyring, so they work without pved. `status --watch` draws each node's CPU, RAM and temperature and each running guest's CPU as text sparklines (`▁▃▅█`); when pved is already running, its history fills them at once. `doctor` only reads; when something is wrong it prints what to run. It exits with 1 when something needs attention.
 
 ```
 [ ok ] config                 /home/you/.config/pve-bar/pved.conf: home, lab
@@ -150,6 +151,8 @@ cargo test --workspace                                    # Rust tests (private 
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 cargo bench -p pve-core                                   # ring buffer, snapshot and diff timings
+tools/footprint.sh bench                                  # pved's CPU, RAM and signals on a private bus (mock Proxmox)
+tools/footprint.sh live                                   # the installed pved and gnome-shell, read-only
 npm test          # extension and installer tests (node, fake D-Bus, no GNOME needed)
 npm run check     # syntax check of every module
 

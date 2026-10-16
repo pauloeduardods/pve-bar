@@ -50,7 +50,10 @@ fn build_client(trust: Trust) -> Result<(reqwest::Client, Seen), String> {
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
         .pool_idle_timeout(IDLE_TIMEOUT)
-        .pool_max_idle_per_host(1)
+        // The main poll plus up to 3 watched-guest requests run at once
+        // (pved, poller.rs); keeping them all alive avoids a TLS handshake
+        // per request.
+        .pool_max_idle_per_host(4)
         .http1_only()
         .user_agent(concat!("pve-bar/", env!("CARGO_PKG_VERSION")))
         .build()

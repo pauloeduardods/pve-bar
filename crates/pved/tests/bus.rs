@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! pved --fake on a private session bus: the name, the properties, GetValues
-//! and the Updated signal, as the extension sees them. Needs dbus-daemon
+//! pved --fake on a private session bus: the name, the properties, GetValues,
+//! Updated, GetHistory and Watch/Unwatch, as the extension sees them. Needs dbus-daemon
 //! (package dbus-daemon); never touches the real session bus.
 
 use std::collections::HashMap;
@@ -30,10 +30,36 @@ impl Drop for Bus {
     }
 }
 
+/// A session bus config without service directories, so nothing installed
+/// on the machine (gnome-shell's ScreenSaver, the real keyring) is ever
+/// activated on the private bus when pved looks for it.
+const BUS_CONFIG: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"#;
+
 fn private_bus() -> Bus {
     use std::io::{BufRead, BufReader};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let config = std::env::temp_dir().join(format!(
+        "pved-bus-{}-{}.conf",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&config, BUS_CONFIG).unwrap();
     let mut daemon = Command::new("dbus-daemon")
-        .args(["--session", "--nofork", "--print-address=1"])
+        .arg(format!("--config-file={}", config.display()))
+        .args(["--nofork", "--print-address=1"])
         .stdout(Stdio::piped())
         .spawn()
         .expect("dbus-daemon (package dbus-daemon) is needed for these tests");
@@ -41,6 +67,8 @@ fn private_bus() -> Bus {
     BufReader::new(daemon.stdout.take().unwrap())
         .read_line(&mut address)
         .unwrap();
+    // Read at startup; the daemon is listening once it printed its address.
+    let _ = std::fs::remove_file(&config);
     Bus {
         daemon,
         address: address.trim().to_owned(),
@@ -114,7 +142,7 @@ fn publishes_servers_nodes_guests_and_values() {
 
         let version: String = p.get_property("Version").await.unwrap();
         assert_eq!(version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(p.get_property::<u32>("ApiVersion").await.unwrap(), 1);
+        assert_eq!(p.get_property::<u32>("ApiVersion").await.unwrap(), 2);
         assert!(p.get_property::<bool>("Fake").await.unwrap());
         assert_eq!(p.get_property::<String>("ConfigError").await.unwrap(), "");
 
@@ -161,5 +189,155 @@ fn updated_carries_only_changes() {
             changed.len() < all.len(),
             "only what changed, not everything"
         );
+    });
+}
+
+type History = HashMap<String, (Vec<f64>, Vec<f64>)>;
+
+async fn history(p: &zbus::Proxy<'_>, keys: &[&str]) -> History {
+    p.call("GetHistory", &(keys,)).await.unwrap()
+}
+
+/// Calls GetValues until `check` holds (pved polls every 100 ms here).
+async fn values_until(
+    p: &zbus::Proxy<'_>,
+    what: &str,
+    check: impl Fn(&HashMap<String, f64>) -> bool,
+) -> HashMap<String, f64> {
+    for _ in 0..150 {
+        let values: HashMap<String, f64> = p.call("GetValues", &()).await.unwrap();
+        if check(&values) {
+            return values;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[test]
+fn history_of_every_key_oldest_first() {
+    let mut bus = private_bus();
+    start_pved(&mut bus);
+    rt().block_on(async {
+        let conn = connect(&bus.address).await;
+        wait_for_name(&conn).await;
+        let p = proxy(&conn).await;
+        let values = wait_for_first_poll(&p).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let all = history(&p, &[]).await;
+        assert!(values.keys().all(|k| all.contains_key(k)), "every key");
+        let (ages, cpu) = &all["home/node/pve/cpu"];
+        assert!(ages.len() >= 3, "{ages:?}");
+        assert_eq!(ages.len(), cpu.len());
+        assert!(
+            ages.windows(2).all(|w| w[0] > w[1]),
+            "oldest first: {ages:?}"
+        );
+        assert!(cpu.iter().all(|v| (0.0..=100.0).contains(v)));
+
+        let some = history(&p, &["lab/node/lab1/mem", "lab/guest/9999/cpu", "x"]).await;
+        assert_eq!(some.keys().collect::<Vec<_>>(), ["lab/node/lab1/mem"]);
+    });
+}
+
+#[test]
+fn watch_brings_details_with_a_backfilled_hour_and_unwatch_removes_them() {
+    let mut bus = private_bus();
+    start_pved(&mut bus);
+    rt().block_on(async {
+        let conn = connect(&bus.address).await;
+        wait_for_name(&conn).await;
+        let p = proxy(&conn).await;
+        wait_for_first_poll(&p).await;
+        assert!(
+            history(&p, &["home/guest/100/netin"]).await.is_empty(),
+            "no details before a watch"
+        );
+
+        let _: () = p.call("Watch", &("home", 100u32)).await.unwrap();
+        let values = values_until(&p, "the guest's rates", |v| {
+            v.contains_key("home/guest/100/netin")
+        })
+        .await;
+        for key in [
+            "uptime",
+            "netout",
+            "diskread",
+            "diskwrite",
+            "maxmem",
+            "maxcpu",
+            "fs",
+        ] {
+            assert!(
+                values.contains_key(&format!("home/guest/100/{key}")),
+                "{key}: {values:?}"
+            );
+        }
+        let h = history(&p, &["home/guest/100/netin", "home/guest/100/cpu"]).await;
+        let (ages, netin) = &h["home/guest/100/netin"];
+        assert!(netin.len() >= 60, "the hour from rrddata: {}", netin.len());
+        assert!(ages[0] > 3000.0 && ages[0] <= 3600.0, "{}", ages[0]);
+        assert!(h["home/guest/100/cpu"].0[0] > 3000.0, "cpu backfilled too");
+
+        let mut updates = p.receive_signal("Updated").await.unwrap();
+        let _: () = p.call("Unwatch", &("home", 100u32)).await.unwrap();
+        let removed = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(msg) = updates.next().await {
+                let (changed,): (HashMap<String, f64>,) = msg.body().deserialize().unwrap();
+                if let Some(v) = changed.get("home/guest/100/uptime") {
+                    return *v;
+                }
+            }
+            panic!("signal stream ended");
+        })
+        .await
+        .expect("no NaN for the unwatched guest");
+        assert!(removed.is_nan());
+        let values: HashMap<String, f64> = p.call("GetValues", &()).await.unwrap();
+        assert!(!values.contains_key("home/guest/100/netin"));
+        assert!(values.contains_key("home/guest/100/cpu"));
+    });
+}
+
+#[test]
+fn a_client_that_leaves_stops_watching_and_watches_are_limited() {
+    let mut bus = private_bus();
+    start_pved(&mut bus);
+    rt().block_on(async {
+        let conn = connect(&bus.address).await;
+        wait_for_name(&conn).await;
+        let p = proxy(&conn).await;
+        wait_for_first_poll(&p).await;
+
+        {
+            let other = connect(&bus.address).await;
+            let q = proxy(&other).await;
+            for vmid in 100..116u32 {
+                let _: () = q.call("Watch", &("lab", vmid)).await.unwrap();
+            }
+            let err = q
+                .call::<_, _, ()>("Watch", &("lab", 116u32))
+                .await
+                .unwrap_err();
+            match err {
+                zbus::Error::MethodError(name, _, _) => assert_eq!(
+                    name.as_str(),
+                    "io.github.pauloeduardods.PveBar1.Error.TooManyWatches"
+                ),
+                e => panic!("{e:?}"),
+            }
+            // Watching one again does not count, and others still can.
+            let _: () = q.call("Watch", &("lab", 100u32)).await.unwrap();
+            let _: () = p.call("Watch", &("lab", 116u32)).await.unwrap();
+            values_until(&p, "lab details", |v| {
+                v.contains_key("lab/guest/101/uptime")
+            })
+            .await;
+        }
+        values_until(&p, "details gone with their client", |v| {
+            !v.contains_key("lab/guest/101/uptime")
+        })
+        .await;
     });
 }

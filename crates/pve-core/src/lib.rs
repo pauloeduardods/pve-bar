@@ -6,6 +6,8 @@ pub mod backoff;
 pub mod config;
 pub mod diff;
 pub mod fake;
+pub mod guest;
+pub mod history;
 pub mod permissions;
 pub mod resources;
 pub mod ring;

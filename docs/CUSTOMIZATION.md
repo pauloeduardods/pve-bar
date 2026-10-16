@@ -87,6 +87,20 @@ These keys use the same `Updated` / `GetValues` / `GetHistory` paths and are
 removed (NaN) when the last watcher leaves. A misbehaving client can watch at
 most 16 guests; further calls fail with `...Error.TooManyWatches`.
 
+As built (lane A; `ARCHITECTURE.md` has the details and the rounding of each
+key):
+
+- Watches are counted per caller *and guest*: a client that watches a guest
+  twice (bar segment and open menu on one connection) must `Unwatch` it
+  twice; repeated watches of one guest count once toward the 16.
+- A watch of a guest that does not exist (yet) is accepted and does nothing.
+- A new watch is fetched at once, not at the next poll. `get-fsinfo` is
+  asked on that first fetch and then every 6th.
+- The rrddata backfill also fills gaps of the rings it covers (e.g. a poll
+  that failed), not only the time before the first sample.
+- `GetHistory` returns samples at most one hour old, by time: after backing
+  off to 120 s that is 30 points, not 360.
+
 ## 3. Layout engine (lane B)
 
 `extension/lib/layout.js`: pure, no GNOME imports, never throws on bad input;

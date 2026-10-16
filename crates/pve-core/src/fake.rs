@@ -2,8 +2,11 @@
 //! Synthetic servers for `pved --fake`: each one node with guests whose numbers
 //! wander like real ones, so the extension can be developed without Proxmox.
 //! pved fakes two servers: `home` (30 guests) and `lab` (6 guests).
-//! Deterministic for a given seed.
+//! Deterministic for a given seed. Watched guests get details too: byte
+//! counters that follow a smooth wave of the caller's clock (so the rates
+//! move), a backfilled hour and, for VMs with the agent, a filesystem.
 
+use crate::guest::{GuestStatus, RrdPoint};
 use crate::resources::Resource;
 use crate::snapshot::{GIB, HostTemp};
 
@@ -179,11 +182,94 @@ impl FakeCluster {
         out
     }
 
+    fn guest(&self, vmid: u32) -> Option<&FakeGuest> {
+        self.guests.iter().find(|g| g.vmid == vmid)
+    }
+
+    /// `status/current` of a guest at `t` seconds on the caller's clock.
+    pub fn guest_status(&self, vmid: u32, t: f64) -> Option<GuestStatus> {
+        let g = self.guest(vmid)?;
+        let wave = Wave::of(vmid);
+        let counter = |scale: f64| g.running.then(|| (wave.integral(t) * scale).round());
+        Some(GuestStatus {
+            status: if g.running { "running" } else { "stopped" }.into(),
+            uptime: Some(if g.running {
+                t + f64::from(vmid) * 3600.0
+            } else {
+                0.0
+            }),
+            cpus: Some(g.maxcpu),
+            maxmem: Some(g.maxmem as f64),
+            netin: counter(1.0),
+            netout: counter(0.3),
+            diskread: counter(0.05),
+            diskwrite: counter(0.2),
+            agent: !g.lxc && vmid.is_multiple_of(2),
+        })
+    }
+
+    /// `rrddata?timeframe=hour`: 70 one-minute points ending at `unix_now`,
+    /// which is `t_now` on the caller's clock.
+    pub fn guest_rrd(&self, vmid: u32, unix_now: f64, t_now: f64) -> Vec<RrdPoint> {
+        let Some(g) = self.guest(vmid) else {
+            return Vec::new();
+        };
+        let wave = Wave::of(vmid);
+        let end = (unix_now / 60.0).floor() * 60.0;
+        (0..70)
+            .map(|i| {
+                let time = end - f64::from(69 - i) * 60.0;
+                let t = t_now - (unix_now - time);
+                let swing = (t / 600.0 + f64::from(vmid)).sin();
+                RrdPoint {
+                    time,
+                    cpu: Some((g.cpu + 0.1 * swing).clamp(0.0, 1.0)),
+                    mem: Some(((g.mem + 0.03 * swing).clamp(0.0, 1.0)) * g.maxmem as f64),
+                    maxmem: Some(g.maxmem as f64),
+                    netin: Some(wave.rate(t)),
+                    netout: Some(wave.rate(t) * 0.3),
+                }
+            })
+            .collect()
+    }
+
+    /// `agent/get-fsinfo` as `% used`; None for guests without the agent.
+    pub fn guest_fs(&self, vmid: u32) -> Option<f64> {
+        self.guest(vmid).filter(|g| g.running && !g.lxc)?;
+        vmid.is_multiple_of(2)
+            .then(|| (20.0 + f64::from(vmid % 60) + self.cycle as f64 * 0.01).min(99.0))
+    }
+
     pub fn temp(&self) -> HostTemp {
         HostTemp {
             node: self.node.clone(),
             celsius: self.host_temp,
         }
+    }
+}
+
+/// A byte rate that rises and falls: `base * (1.2 + sin(t / period))`,
+/// never negative, so its integral (the counter) only grows.
+#[derive(Debug, Clone, Copy)]
+struct Wave {
+    base: f64,
+    period: f64,
+}
+
+impl Wave {
+    fn of(vmid: u32) -> Self {
+        Self {
+            base: 2_000.0 + f64::from(vmid % 7) * 15_000.0,
+            period: 60.0 + f64::from(vmid % 5) * 40.0,
+        }
+    }
+
+    fn rate(self, t: f64) -> f64 {
+        self.base * (1.2 + (t / self.period).sin())
+    }
+
+    fn integral(self, t: f64) -> f64 {
+        self.base * (1.2 * t + self.period * (1.0 - (t / self.period).cos()))
     }
 }
 
@@ -222,6 +308,49 @@ mod tests {
             first.values,
             Snapshot::build("x", &f.resources(), None).values
         );
+    }
+
+    #[test]
+    fn watched_guests_have_details() {
+        use crate::guest::{Counters, rrd_series};
+        let f = FakeCluster::new(42, "pve", 30);
+        let vm = f.guest_status(100, 50.0).unwrap();
+        assert_eq!(vm.status, "running");
+        assert!(vm.agent_usable());
+        assert_eq!(vm.cpus, Some(4.0));
+        let later = f.guest_status(100, 60.0).unwrap();
+        let rates = Counters::of(&later, 60.0).rates(&Counters::of(&vm, 50.0));
+        assert!(
+            rates.iter().all(|r| r.is_some_and(|r| r > 0.0)),
+            "{rates:?}"
+        );
+        assert!(f.guest_fs(100).is_some());
+        let ct = f.guest_status(101, 50.0).unwrap();
+        assert!(!ct.agent);
+        assert_eq!(f.guest_fs(101), None);
+        let stopped = f.guest_status(103, 50.0).unwrap();
+        assert_eq!((stopped.status.as_str(), stopped.netin), ("stopped", None));
+        assert!(f.guest_status(999, 0.0).is_none());
+
+        let rrd = f.guest_rrd(100, 1_729_000_000.0, 500.0);
+        assert_eq!(rrd.len(), 70);
+        assert!(rrd.windows(2).all(|w| w[1].time - w[0].time == 60.0));
+        assert!(
+            rrd_series(&rrd)
+                .iter()
+                .all(|(_, s)| s.iter().all(|p| p.1.is_finite()))
+        );
+    }
+
+    #[test]
+    fn counters_only_grow() {
+        let w = Wave::of(104);
+        let mut last = w.integral(0.0);
+        for i in 1..2000 {
+            let now = w.integral(f64::from(i) * 3.0);
+            assert!(now > last);
+            last = now;
+        }
     }
 
     #[test]
