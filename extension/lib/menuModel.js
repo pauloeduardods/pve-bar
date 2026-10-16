@@ -104,6 +104,16 @@ function serverAggregate(group, values, thresholds) {
 }
 
 /**
+ * Whether a server's section starts expanded: it was expanded before, or it is
+ * the only server and the user has not collapsed it.
+ */
+export function shouldExpand(name, serverCount, expanded, collapsed) {
+    if (expanded.has(name))
+        return true;
+    return serverCount === 1 && !collapsed.has(name);
+}
+
+/**
  * A server's title in the menu: {text, level, down}. Up:
  * "home · 23% · 61% · 54° · 23/30" (CPU, RAM, the hottest temperature when
  * known, running/total guests when it has any), with the worst level of its

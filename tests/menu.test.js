@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {defaultLayout, pinGuest, sanitizeLayout, MAX_SEGMENTS} from '../extension/lib/layout.js';
 import {
     FS_HINT, GUEST_WINDOW, MENU_NODE_WINDOW, MenuNeeds, formatUptime, guestDetail, guestHistoryKeys, mergeNeeds,
-    nodeHistoryKeys, nodeSetKey, pinLabel, pinState, serverSummary,
+    nodeHistoryKeys, nodeSetKey, pinLabel, pinState, serverSummary, shouldExpand,
 } from '../extension/lib/menuModel.js';
 import {Level, THRESHOLD_DEFAULTS} from '../extension/lib/model.js';
 
@@ -316,4 +316,18 @@ test('MenuNeeds: a guest the bar already draws keeps its key once', () => {
     needs.setPanel(['home/guest/100/cpu'], 300);
     needs.showGuest('home', 100);
     assert.deepEqual(needs.needs(), {keys: guestHistoryKeys('home', 100), span: GUEST_WINDOW});
+});
+
+// ---- initial expansion --------------------------------------------------------------
+test('shouldExpand: a lone server starts expanded', () => {
+    assert.equal(shouldExpand('home', 1, new Set(), new Set()), true);
+});
+
+test('shouldExpand: a lone server the user collapsed stays collapsed', () => {
+    assert.equal(shouldExpand('home', 1, new Set(), new Set(['home'])), false);
+});
+
+test('shouldExpand: several servers start collapsed unless remembered', () => {
+    assert.equal(shouldExpand('home', 2, new Set(), new Set()), false);
+    assert.equal(shouldExpand('home', 2, new Set(['home']), new Set()), true);
 });

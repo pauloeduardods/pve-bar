@@ -25,7 +25,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {paintPieces} from '../draw.js';
 import {seriesLevelOf} from '../layout.js';
-import {MENU_GRAPHS, MENU_NODE_WINDOW, nodeHistoryKeys, nodeSetKey, serverSummary} from '../menuModel.js';
+import {MENU_GRAPHS, MENU_NODE_WINDOW, nodeHistoryKeys, nodeSetKey, serverSummary, shouldExpand} from '../menuModel.js';
 import {
     formatMemory, formatPercent, formatTemp, graphNeedsRepaint, groupByServer, guestRows, guestSetKey, guestSummary,
     level, nodeSummary, nodeValue, sampleSeries, serverIdsKey, sparklinePieces, worstLevel,
@@ -123,6 +123,7 @@ export class ServerMenu {
         this._idsKey = null;
         this._sections = [];
         this._expanded = new Set(); // names of the expanded servers, kept across rebuilds and openings
+        this._collapsed = new Set(); // servers the user collapsed; a lone server is otherwise open
         this._menuKeys = null;
         this._open = false;
         this.section = new PopupMenu.PopupMenuSection();
@@ -166,8 +167,8 @@ export class ServerMenu {
         groupByServer(snap.servers, snap.nodes, snap.guests).forEach((group, i) => {
             const sec = this._sections[i];
             sec.group = group;
-            if (!sec.expanded && this._expanded.has(group.name))
-                this._setExpanded(sec, true); // expanded before the list of servers changed
+            if (!sec.expanded && shouldExpand(group.name, snap.servers.length, this._expanded, this._collapsed))
+                this._setExpanded(sec, true); // expanded before the list changed, or the only server
             this._renderHeader(sec, group, snap.values, options);
             if (sec.expanded)
                 this._renderBody(sec, group, snap, changed);
@@ -261,10 +262,13 @@ export class ServerMenu {
     _setExpanded(sec, expanded) {
         sec.expanded = expanded;
         if (sec.group) {
-            if (expanded)
+            if (expanded) {
                 this._expanded.add(sec.group.name);
-            else
+                this._collapsed.delete(sec.group.name);
+            } else {
                 this._expanded.delete(sec.group.name);
+                this._collapsed.add(sec.group.name);
+            }
         }
         setVisible(sec.bodyVisible, expanded);
         sec.arrow.rotation_angle_z = expanded ? 90 : 0;
