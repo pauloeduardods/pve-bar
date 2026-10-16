@@ -88,6 +88,21 @@ Run `pvectl setup NAME` again to change a server (Enter keeps each value), and `
 
 The Proxmox API has no temperatures. To show them, install pve-temp-agent on each host: it is a 500 KB static binary with no dependencies, sandboxed by systemd, that serves `/sys/class/hwmon` readings behind its own token. Follow [deploy/pve-temp-agent/README.md](deploy/pve-temp-agent/README.md), then run `pvectl setup NAME` again and give it the agent URL and token.
 
+## Alerts
+
+pve-bar sends a GNOME notification (source "pve-bar") when something needs attention. Settings: Extensions, pve-bar, Alerts, which also has a **Test notification** button. Each alert names the server and the node or guest, and fires once per episode.
+
+| Alert | Default | Fires when | Ends when |
+|---|---|---|---|
+| Host temperature | on, 85 °C for 60 s | a node stays at or above the limit | below limit − 3 |
+| Host RAM | on, 95 % for 120 s | a node's RAM stays at or above the limit | below limit − 5 |
+| Host disk | on, 90 % | a node's disk reaches the limit | below limit − 2 |
+| Server unreachable | on, 120 s | a server's state is not `ok` for that long | `ok` again |
+| Guest stopped | off | a guest that was running stops (optionally only the listed `server/vmid`) | it runs again |
+| Guest started | off | a guest starts | n/a |
+
+Nothing fires for the state found when pve-bar connects, and a missing reading (for example no temperature agent) never alerts.
+
 ## Command line
 
 ```bash

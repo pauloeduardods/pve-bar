@@ -28,5 +28,21 @@
     <key name="color-normal" type="s"><default>''</default><summary>Normal color</summary></key>
     <key name="color-warm" type="s"><default>'#f8e45c'</default><summary>Warm color</summary></key>
     <key name="color-hot" type="s"><default>'#f66151'</default><summary>Hot color</summary></key>
+
+    <!-- Alerts -->
+    <key name="alert-temp" type="b"><default>true</default><summary>Notify when a host stays hot</summary></key>
+    <key name="alert-temp-limit" type="i"><range min="30" max="110"/><default>85</default><summary>Temperature alert: from (°C)</summary></key>
+    <key name="alert-temp-seconds" type="i"><range min="2" max="3600"/><default>60</default><summary>Temperature alert: held for (seconds)</summary></key>
+    <key name="alert-mem" type="b"><default>true</default><summary>Notify when a host's RAM stays full</summary></key>
+    <key name="alert-mem-limit" type="i"><range min="10" max="100"/><default>95</default><summary>RAM alert: from (%)</summary></key>
+    <key name="alert-mem-seconds" type="i"><range min="2" max="3600"/><default>120</default><summary>RAM alert: held for (seconds)</summary></key>
+    <key name="alert-disk" type="b"><default>true</default><summary>Notify when a host's disk is nearly full</summary></key>
+    <key name="alert-disk-limit" type="i"><range min="10" max="100"/><default>90</default><summary>Disk alert: from (%)</summary></key>
+    <key name="alert-down" type="b"><default>true</default><summary>Notify when a server is unreachable</summary></key>
+    <key name="alert-down-seconds" type="i"><range min="10" max="3600"/><default>120</default><summary>Unreachable alert: after (seconds)</summary></key>
+    <key name="alert-guest-stopped" type="b"><default>false</default><summary>Notify when a guest stops</summary></key>
+    <key name="alert-guests" type="as"><default>[]</default><summary>Guests (server/vmid) the stop alert covers; empty = all</summary></key>
+    <key name="alert-guest-started" type="b"><default>false</default><summary>Notify when a guest starts</summary></key>
+    <key name="alert-test" type="i"><default>0</default><summary>Counter the Test notification button bumps</summary></key>
   </schema>
 </schemalist>
