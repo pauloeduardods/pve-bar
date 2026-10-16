@@ -102,6 +102,8 @@ The bar is a list of segments stored as JSON in the `panel-layout` setting. Each
 - **Presets**: Minimal, Default, Graphs and Cluster (one segment per server).
 - Thresholds: `cpu-*`, `mem-*`, `disk-*`, `temp-*` and `fs-*` (`-warm` and `-hot`).
 
+Edit it in Settings (Extensions, pve-bar): the **Layout** page lists the segments (move, add, remove; merge a reading into the next segment that reads the same target, split it out), picks each segment's target from the servers, nodes and guests pved lists (or takes typed names while pved is not running), and has the template, icon and graph controls, the presets with Undo, and import/export of the layout as a JSON file. A preview at the top draws the bar with the same code, from pved's live values and history or sample values. **Thresholds** holds the warm/hot limits and colors, **General** the selected server and node and the position in the top bar.
+
 On the first start after an upgrade, the layout is built once from the older `server`, `node` and `show-icons` settings, so the bar looks the same. Details are in [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md). To look at the bar without GNOME Shell: `gjs -m tools/render-bar.js bar.png`.
 
 ## Alerts

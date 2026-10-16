@@ -207,6 +207,15 @@ import/export via `Gtk.FileDialog`, and a **live preview** rendered by
 pved is not running). Also: a Thresholds page (all `*-warm`/`*-hot`), and the
 existing General settings.
 
+As built: the pages are `lib/prefs/{layoutPage,generalPage,thresholdsPage}.js`
+assembled by `prefs.js`; one `PveClient` per window (`lib/prefs/daemon.js`)
+feeds the preview, the target pickers and the alert guest checklist. The
+preview (`lib/prefs/preview.js`) updates like the bar: widgets only when what
+they show changed, graphs only on a value of their series or one column of
+time (`graphNeedsRepaint`). The pickers' pure helpers are in
+`lib/prefs/choices.js` (`tests/prefs.test.js`); `tests/smoke/prefs-smoke.sh`
+drives the pages headlessly (Xvfb, private bus, memory GSettings).
+
 ## 5. Alerts (lane D)
 
 All in the extension, pure engine (`extension/lib/alerts.js`, no GNOME
