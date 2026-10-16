@@ -30,10 +30,36 @@ impl Drop for Bus {
     }
 }
 
+/// A session bus config without service directories, so nothing installed
+/// on the machine (gnome-shell's ScreenSaver, the real keyring) is ever
+/// activated on the private bus when pved looks for it.
+const BUS_CONFIG: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"#;
+
 fn private_bus() -> Bus {
     use std::io::{BufRead, BufReader};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let config = std::env::temp_dir().join(format!(
+        "pved-bus-{}-{}.conf",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&config, BUS_CONFIG).unwrap();
     let mut daemon = Command::new("dbus-daemon")
-        .args(["--session", "--nofork", "--print-address=1"])
+        .arg(format!("--config-file={}", config.display()))
+        .args(["--nofork", "--print-address=1"])
         .stdout(Stdio::piped())
         .spawn()
         .expect("dbus-daemon (package dbus-daemon) is needed for these tests");
@@ -41,6 +67,8 @@ fn private_bus() -> Bus {
     BufReader::new(daemon.stdout.take().unwrap())
         .read_line(&mut address)
         .unwrap();
+    // Read at startup; the daemon is listening once it printed its address.
+    let _ = std::fs::remove_file(&config);
     Bus {
         daemon,
         address: address.trim().to_owned(),
