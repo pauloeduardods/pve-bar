@@ -4,11 +4,12 @@
 
 mod poller;
 mod service;
+mod watch;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt as _;
 use futures_util::future::join_all;
@@ -16,11 +17,12 @@ use pve_core::backoff::{self, Schedule};
 use pve_core::fake::FakeCluster;
 use pve_sys::paths;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::Notify;
 use zbus::Connection;
 use zbus::object_server::SignalEmitter;
 
-use crate::poller::{Poller, Source};
-use crate::service::{BUS_NAME, OBJECT_PATH, Published, PveBar, ServerView, Shared};
+use crate::poller::{Now, Poller, Source};
+use crate::service::{BUS_NAME, Clock, OBJECT_PATH, Published, PveBar, ServerView, Shared, lock};
 
 const USAGE: &str = "\
 Usage: pved [--fake] [--config PATH]
@@ -150,11 +152,44 @@ trait ScreenSaver {
     fn active_changed(&self, active: bool) -> zbus::Result<()>;
 }
 
+fn unix_now() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// Hands each poller the guests watched on its server; true for the ones
+/// with a watch that has not been fetched yet.
+fn sync_watches(shared: &Shared, pollers: &mut [Poller]) -> Vec<bool> {
+    let state = lock(shared);
+    pollers
+        .iter_mut()
+        .map(|p| p.sync_watches(&state.watches.of_server(&p.id)))
+        .collect()
+}
+
+/// Records one sample per key of every server just polled, and the
+/// backfill the pollers brought back.
+fn record_history(shared: &Shared, pollers: &mut [Poller], polled: &[bool], now: f64) {
+    let mut state = lock(shared);
+    for (p, polled) in pollers.iter_mut().zip(polled) {
+        let history = state.history.server(&p.id);
+        if *polled {
+            history.record(now, p.snapshot.as_ref().map(|s| &s.values));
+        }
+        for (key, points) in p.backfill.drain(..) {
+            history.backfill(&key, &points, now);
+        }
+    }
+}
+
 async fn run(options: Options) -> zbus::Result<()> {
     let conn = Connection::session().await?;
+    let clock = Clock::start();
     let (mut pollers, mut config_error) = load_pollers(&options);
     let shared = Shared::default();
-    *shared.lock().unwrap_or_else(|e| e.into_inner()) = compose(&pollers, &config_error);
+    lock(&shared).published = compose(&pollers, &config_error);
+    let watch_changed = Arc::new(Notify::new());
 
     conn.object_server()
         .at(
@@ -162,6 +197,8 @@ async fn run(options: Options) -> zbus::Result<()> {
             PveBar {
                 shared: Arc::clone(&shared),
                 fake: options.fake,
+                clock,
+                watch_changed: Arc::clone(&watch_changed),
             },
         )
         .await?;
@@ -169,6 +206,17 @@ async fn run(options: Options) -> zbus::Result<()> {
     conn.request_name(BUS_NAME).await?;
     eprintln!("pved {}: serving {BUS_NAME}", env!("CARGO_PKG_VERSION"));
     let emitter = SignalEmitter::new(&conn, OBJECT_PATH)?;
+
+    // A client that leaves the bus (or crashes) stops watching. The match
+    // rule asks only for names that lost their owner (arg2 = ""), so a
+    // client connecting does not wake pved.
+    let mut names_lost = match zbus::fdo::DBusProxy::new(&conn).await {
+        Ok(dbus) => dbus
+            .receive_name_owner_changed_with_args(&[(2, "")])
+            .await
+            .ok(),
+        Err(_) => None,
+    };
 
     // Screen lock: poll every 60 s while nobody can see the panel. Without
     // gnome-screensaver on the bus, the screen simply never counts as locked.
@@ -183,9 +231,26 @@ async fn run(options: Options) -> zbus::Result<()> {
         signal(SignalKind::hangup()).map_err(|e| zbus::Error::Failure(e.to_string()))?;
 
     loop {
-        let now = Instant::now();
-        let due = pollers.iter_mut().filter(|p| p.next <= now);
-        join_all(due.map(|p| p.poll(&conn, locked))).await;
+        let fresh = sync_watches(&shared, &mut pollers);
+        let instant = Instant::now();
+        let now = Now {
+            mono: clock.now(),
+            wall: unix_now(),
+        };
+        let conn = &conn;
+        let polled = join_all(pollers.iter_mut().zip(fresh).map(|(p, fresh)| async move {
+            if p.next <= instant {
+                p.poll(conn, locked, now).await;
+                true
+            } else {
+                if fresh {
+                    p.start_watches(now).await;
+                }
+                false
+            }
+        }))
+        .await;
+        record_history(&shared, &mut pollers, &polled, now.mono);
         service::publish(&shared, &emitter, compose(&pollers, &config_error)).await?;
 
         // Unconfigured: wait for a reload, re-checking the file once a minute.
@@ -198,6 +263,23 @@ async fn run(options: Options) -> zbus::Result<()> {
             () = tokio::time::sleep_until(wake.into()) => {
                 if pollers.is_empty() && !options.fake {
                     (pollers, config_error) = load_pollers(&options);
+                }
+            }
+            // Watch or Unwatch changed the watched guests: fetch or drop now.
+            () = watch_changed.notified() => {}
+            lost = async {
+                match names_lost.as_mut() {
+                    Some(stream) => stream.next().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match lost {
+                    Some(signal) => {
+                        if let Ok(args) = signal.args() {
+                            lock(&shared).watches.drop_caller(args.name.as_str());
+                        }
+                    }
+                    None => names_lost = None,
                 }
             }
             change = async {
@@ -223,6 +305,9 @@ async fn run(options: Options) -> zbus::Result<()> {
             _ = hangup.recv() => {
                 eprintln!("reloading the configuration");
                 (pollers, config_error) = load_pollers(&options);
+                lock(&shared)
+                    .history
+                    .retain_servers(|id| pollers.iter().any(|p| p.id == id));
             }
         }
     }

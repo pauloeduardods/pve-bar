@@ -1,22 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The D-Bus object and the published state behind it.
+//! The D-Bus object and the state behind it: what is published, the
+//! history of every value and who watches which guest.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use pve_core::Snapshot;
 use pve_core::diff::{self, Values};
+use pve_core::history::{self, History};
+use tokio::sync::Notify;
 use zbus::fdo::Properties;
 use zbus::interface;
+use zbus::message::Header;
 use zbus::names::InterfaceName;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::Value;
 
+use crate::watch::{self, Watches};
+
 pub const BUS_NAME: &str = "io.github.pauloeduardods.PveBar1";
 pub const OBJECT_PATH: &str = "/io/github/pauloeduardods/PveBar1";
 pub const IFACE: &str = "io.github.pauloeduardods.PveBar1";
-pub const API_VERSION: u32 = 1;
+/// 2 added GetHistory, Watch and Unwatch.
+pub const API_VERSION: u32 = 2;
 
 /// (server, state, message)
 pub type ServerRow = (String, String, String);
@@ -115,16 +123,59 @@ impl Published {
     }
 }
 
-pub type Shared = Arc<Mutex<Published>>;
+/// Everything the object and the polling loop share. One thread, so the
+/// lock is never contended; it only satisfies zbus.
+#[derive(Debug, Default)]
+pub struct State {
+    pub published: Published,
+    pub history: History,
+    pub watches: Watches,
+}
 
-fn lock(m: &Mutex<Published>) -> MutexGuard<'_, Published> {
+pub type Shared = Arc<Mutex<State>>;
+
+pub fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
     // A panic while holding the lock leaves plain data behind; keep serving.
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// pved's monotonic clock, in seconds: the history's time base.
+#[derive(Debug, Clone, Copy)]
+pub struct Clock(Instant);
+
+impl Clock {
+    pub fn start() -> Self {
+        Self(Instant::now())
+    }
+
+    pub fn now(&self) -> f64 {
+        self.0.elapsed().as_secs_f64()
+    }
+}
+
+#[derive(Debug, zbus::DBusError)]
+#[zbus(prefix = "io.github.pauloeduardods.PveBar1.Error")]
+pub enum Error {
+    #[zbus(error)]
+    ZBus(zbus::Error),
+    /// A client watches the most guests it may ([`watch::MAX_PER_CALLER`]).
+    TooManyWatches(String),
+}
+
+/// (ages in seconds, oldest first; values, NaN for gaps)
+pub type HistoryReply = HashMap<String, history::Series>;
+
 pub struct PveBar {
     pub shared: Shared,
     pub fake: bool,
+    pub clock: Clock,
+    /// Wakes the polling loop when the set of watched guests changed.
+    pub watch_changed: Arc<Notify>,
+}
+
+/// The caller's unique bus name; "" on a peer-to-peer connection.
+fn caller(header: &Header<'_>) -> String {
+    header.sender().map(|s| s.to_string()).unwrap_or_default()
 }
 
 #[interface(name = "io.github.pauloeduardods.PveBar1")]
@@ -146,30 +197,74 @@ impl PveBar {
 
     #[zbus(property)]
     fn config_error(&self) -> String {
-        lock(&self.shared).config_error.clone()
+        lock(&self.shared).published.config_error.clone()
     }
 
     #[zbus(property)]
     fn servers(&self) -> Vec<ServerRow> {
-        lock(&self.shared).servers.clone()
+        lock(&self.shared).published.servers.clone()
     }
 
     #[zbus(property)]
     fn nodes(&self) -> Vec<NodeRow> {
-        lock(&self.shared).nodes.clone()
+        lock(&self.shared).published.nodes.clone()
     }
 
     #[zbus(property)]
     fn guests(&self) -> Vec<GuestRow> {
-        lock(&self.shared).guests.clone()
+        lock(&self.shared).published.guests.clone()
     }
 
     fn get_values(&self) -> HashMap<String, f64> {
         lock(&self.shared)
+            .published
             .values
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect()
+    }
+
+    /// The last hour of the given keys (every key when empty). Clients call
+    /// it once per connection and then append what `Updated` brings.
+    fn get_history(&self, keys: Vec<String>) -> HistoryReply {
+        let now = self.clock.now();
+        lock(&self.shared)
+            .history
+            .query(&keys, now)
+            .into_iter()
+            .collect()
+    }
+
+    /// Fetch this guest's details every poll, for as long as the caller
+    /// watches it (or until its bus name goes away).
+    fn watch(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        server: String,
+        vmid: u32,
+    ) -> Result<(), Error> {
+        let first = lock(&self.shared)
+            .watches
+            .watch(&caller(&header), (server, vmid))
+            .map_err(|watch::TooMany| {
+                Error::TooManyWatches(format!(
+                    "a client can watch at most {} guests",
+                    watch::MAX_PER_CALLER
+                ))
+            })?;
+        if first {
+            self.watch_changed.notify_one();
+        }
+        Ok(())
+    }
+
+    fn unwatch(&self, #[zbus(header)] header: Header<'_>, server: String, vmid: u32) {
+        let last = lock(&self.shared)
+            .watches
+            .unwatch(&caller(&header), &(server, vmid));
+        if last {
+            self.watch_changed.notify_one();
+        }
     }
 
     #[zbus(signal)]
@@ -184,7 +279,7 @@ pub async fn publish(
     emitter: &SignalEmitter<'_>,
     next: Published,
 ) -> zbus::Result<()> {
-    let changes = lock(shared).replace(next);
+    let changes = lock(shared).published.replace(next);
     if changes.is_empty() {
         return Ok(());
     }
