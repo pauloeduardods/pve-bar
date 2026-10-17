@@ -124,9 +124,15 @@ pub async fn run(config_path: &Path, name: &str) -> Result<ExitCode, String> {
             );
             println!("         pve-bar only reads; a token with only PVEAuditor is safer.");
         }
-        Ok(p) if !p.can_read_guests() => {
+        Ok(p) if !p.missing().is_empty() => {
             println!(
-                "warning: the token cannot see guests (VM.Audit); give it the PVEAuditor role on /."
+                "warning: the token lacks {}, so pve-bar would show nothing.",
+                p.missing().join(" and ")
+            );
+            println!("         A privilege-separated token gets only what its user also has.");
+            println!(
+                "         On the host run: {}",
+                permissions::grant_command(&server.token_id)
             );
         }
         _ => {}
