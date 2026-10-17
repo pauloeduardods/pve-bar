@@ -133,7 +133,11 @@ pub fn client_config(trust: Trust) -> Result<(ClientConfig, Seen), String> {
 }
 
 /// The first rustls error in an error's source chain, looking inside
-/// `io::Error`s too (hyper wraps the handshake failure in one).
+/// `io::Error`s too. reqwest delivers a failed handshake as
+/// `hyper_util::Error(Connect, io::Error(Other, io::Error(InvalidData,
+/// rustls::Error)))`, and `io::Error::source()` skips the error it wraps
+/// (it returns the wrapped error's source), so an `io::Error` is entered
+/// through `get_ref()` instead.
 pub fn find_tls_error<'a>(
     mut e: Option<&'a (dyn std::error::Error + 'static)>,
 ) -> Option<&'a rustls::Error> {
@@ -141,12 +145,13 @@ pub fn find_tls_error<'a>(
         if let Some(tls) = err.downcast_ref::<rustls::Error>() {
             return Some(tls);
         }
-        if let Some(io) = err.downcast_ref::<std::io::Error>()
-            && let Some(tls) = io.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>())
+        e = match err
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
         {
-            return Some(tls);
-        }
-        e = err.source();
+            Some(inner) => Some(inner as &(dyn std::error::Error + 'static)),
+            None => err.source(),
+        };
     }
     None
 }
@@ -161,6 +166,16 @@ mod tests {
         assert_eq!(fp.len(), 95);
         assert!(fp.starts_with("2C:F2:4D:BA"));
         assert_eq!(pve_core::config::normalize_fingerprint(&fp), Some(fp));
+    }
+
+    #[test]
+    fn finds_rustls_inside_nested_io_errors() {
+        use std::io;
+        let tls = rustls::Error::InvalidCertificate(CertificateError::UnknownIssuer);
+        let nested = io::Error::other(io::Error::new(io::ErrorKind::InvalidData, tls.clone()));
+        assert_eq!(find_tls_error(Some(&nested)), Some(&tls));
+        let plain = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
+        assert_eq!(find_tls_error(Some(&plain)), None);
     }
 
     #[test]
