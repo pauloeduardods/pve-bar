@@ -150,9 +150,12 @@ async fn check_server(r: &mut Report, conn: Option<&Connection>, server: &Server
             r.line(
                 Level::Fail,
                 &name("privileges"),
-                "the token cannot read nodes (Sys.Audit) or guests (VM.Audit)",
+                &format!("the token lacks {}", p.missing().join(" and ")),
             );
-            r.fix("give the user and the token the PVEAuditor role on /: Datacenter → Permissions → Add");
+            r.fix(&format!(
+                "a privilege-separated token gets only what its user also has; on the host run: {}",
+                permissions::grant_command(&server.token_id)
+            ));
         }
         Ok(p) if !p.writable.is_empty() => {
             let list: Vec<_> = p.writable.iter().map(String::as_str).collect();

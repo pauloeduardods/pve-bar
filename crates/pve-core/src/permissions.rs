@@ -27,6 +27,22 @@ impl Report {
     pub fn can_read_nodes(&self) -> bool {
         self.granted.contains("Sys.Audit")
     }
+
+    /// The read privileges pve-bar needs and the token lacks.
+    pub fn missing(&self) -> Vec<&'static str> {
+        ["Sys.Audit", "VM.Audit"]
+            .into_iter()
+            .filter(|p| !self.granted.contains(*p))
+            .collect()
+    }
+}
+
+/// The host shell command that gives `token_id` (`user@realm!name`) read
+/// access. A privilege-separated token only gets what both it and its user
+/// are granted, so the role goes to both.
+pub fn grant_command(token_id: &str) -> String {
+    let user = token_id.split_once('!').map_or(token_id, |(u, _)| u);
+    format!("pveum acl modify / --users '{user}' --tokens '{token_id}' --roles PVEAuditor")
 }
 
 /// Parses `{"data": {"/": {"Sys.Audit": 1, ...}, "/vms": {...}}}`.
@@ -88,6 +104,15 @@ mod tests {
     fn nothing_granted() {
         let r = parse(br#"{"data":{}}"#).unwrap();
         assert!(!r.can_read_guests());
+        assert_eq!(r.missing(), ["Sys.Audit", "VM.Audit"]);
         assert!(parse(b"[]").is_err());
+    }
+
+    #[test]
+    fn grant_command_covers_user_and_token() {
+        assert_eq!(
+            grant_command("monitor@pve!pve-bar"),
+            "pveum acl modify / --users 'monitor@pve' --tokens 'monitor@pve!pve-bar' --roles PVEAuditor"
+        );
     }
 }

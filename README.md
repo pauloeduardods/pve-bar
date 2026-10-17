@@ -31,17 +31,20 @@ Do this once per server, in the Proxmox web UI (or the shell commands below, as 
 
 1. **Datacenter → Permissions → Users → Add**: user `monitor`, realm `Proxmox VE authentication server` (`pve`). No password is needed.
 2. **Datacenter → Permissions → API Tokens → Add**: user `monitor@pve`, token id `pve-bar`. Leave **Privilege Separation** checked. Copy the **secret**: Proxmox shows it only once.
-3. **Datacenter → Permissions → Add → API Token Permission**: path `/`, token `monitor@pve!pve-bar`, role **PVEAuditor**, Propagate checked.
+3. **Datacenter → Permissions → Add → User Permission**: path `/`, user `monitor@pve`, role **PVEAuditor**, Propagate checked.
+4. **Datacenter → Permissions → Add → API Token Permission**: path `/`, token `monitor@pve!pve-bar`, role **PVEAuditor**, Propagate checked.
+
+Both are needed: a token with Privilege Separation gets only the privileges that both it and its user have, so a role given to the token alone grants nothing.
 
 The same from the host shell:
 
 ```bash
 pveum user add monitor@pve --comment "pve-bar (read-only)"
 pveum user token add monitor@pve pve-bar --privsep 1    # prints the secret once
-pveum acl modify / --tokens 'monitor@pve!pve-bar' --roles PVEAuditor
+pveum acl modify / --users monitor@pve --tokens 'monitor@pve!pve-bar' --roles PVEAuditor
 ```
 
-`PVEAuditor` can only read. `pvectl doctor` warns if a token can change anything.
+`PVEAuditor` can only read. `pvectl doctor` warns if a token can change anything, and prints this command when it cannot read.
 
 ## 2. Install
 
