@@ -45,7 +45,24 @@ the unit (`systemctl edit pve-temp-agent`).
 
 ## 3. Open port 9101 to your desktop only
 
-With the Proxmox firewall enabled for the host (Datacenter → Firewall and
+First in the service itself, which holds even with the firewall off.
+`systemctl edit pve-temp-agent` and paste, with the host's LAN address and
+your desktops' network:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/pve-temp-agent --listen 192.168.1.10:9101
+IPAddressDeny=any
+IPAddressAllow=192.168.1.0/24
+```
+
+Then `systemctl restart pve-temp-agent`. `--listen` keeps the port off the
+host's other interfaces (VM bridges, VPNs); `IPAddressAllow` makes the
+kernel drop packets from anywhere else. Use the narrowest range that covers
+your desktops: if your VMs are in it, they can reach the agent too.
+
+Then with the Proxmox firewall enabled for the host (Datacenter → Firewall and
 Node → Firewall), allow the desktop and nothing else. In
 `/etc/pve/nodes/<node>/host.fw`:
 

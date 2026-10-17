@@ -2,124 +2,225 @@
 
 Your Proxmox VE servers in the GNOME top bar, next to Wi-Fi:
 
-```
- [▣ 23%] [▤ 61%] [♨ 54°]   ← panel: CPU, RAM and temperature of the server you pick
-```
+![The top bar: node CPU with a graph, RAM, temperature with a graph, and two guests' CPU](docs/screenshots/bar.png)
 
-Click it for every server you watch: each node's CPU, RAM, disk and temperature, and a list of VMs and containers with their status and usage. Several independent servers (or clusters) can be watched at once; one being down never hides the others.
+- the **CPU**, **RAM** and **temperature** of a node, with small graphs of the last minutes, changing color as they heat up;
+- any **VM or container** you pin, with its name and CPU;
+- **several servers or clusters** at once; one being down never hides the others.
 
-pve-bar only reads. It never starts, stops or changes anything in Proxmox.
+Click it for each server's nodes (CPU, RAM, temperature, disk), its guests and their details:
+
+![The menu: one server expanded, with CPU, RAM and temperature graphs, disk, and the guest count](docs/screenshots/menu.png)
+
+pve-bar only reads. It never starts, stops or changes anything in Proxmox, and its API token cannot.
 
 ## How it fits together
 
-- **pved**: a small service in your session (`systemd --user`). Every 10 s it makes one `GET /cluster/resources` call per server, rounds the numbers to what the panel shows, and publishes only what changed on the session D-Bus. It keeps the last hour of every value for the graphs and, while you look at a guest, fetches its details. It uses 6 to 9 MB of RAM and under 0.1 % of one core ([measured](docs/FOOTPRINT.md)).
+- **pved**: a small service in your session (`systemd --user`). Every 10 s it makes one `GET /cluster/resources` call per server, rounds the numbers to what the panel shows, and publishes only what changed on the session D-Bus. It keeps the last hour of every value for the graphs. It uses about 6 MB of RAM and under 0.02 % of one core ([measured](docs/FOOTPRINT.md)).
 - **pvectl**: the command line (`pvectl setup`, `status`, `doctor`).
 - **The GNOME extension**: draws what pved publishes. It never touches the network, files or timers itself. Without pved it shows `pve off`.
-- **pve-temp-agent** (optional): a tiny program on the Proxmox host that serves its temperatures, since the Proxmox API does not. See [deploy/pve-temp-agent](deploy/pve-temp-agent/README.md).
+- **pve-temp-agent** (optional): a 500 KB program on the Proxmox host that serves its temperatures, since the Proxmox API has none.
 
 Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Requirements
 
-- GNOME Shell 46 to 50 (Ubuntu 24.04 or newer), with the GNOME Keyring (standard).
-- Proxmox VE 7 or newer.
-- To build: a Rust toolchain, 1.88 or newer ([rustup](https://rustup.rs)).
+- **Desktop:** GNOME Shell 46 to 50 (Ubuntu 24.04 or newer), X11 or Wayland, with the GNOME Keyring (standard).
+- **Server:** Proxmox VE 7 or newer.
+- **To build:** a Rust toolchain, 1.88 or newer ([rustup](https://rustup.rs)), and a C compiler.
 
-## 1. Create a read-only API token in Proxmox
+## Setup
 
-Do this once per server, in the Proxmox web UI (or the shell commands below, as root on the host).
+Each step says where to run it:
 
-1. **Datacenter → Permissions → Users → Add**: user `monitor`, realm `Proxmox VE authentication server` (`pve`). No password is needed.
-2. **Datacenter → Permissions → API Tokens → Add**: user `monitor@pve`, token id `pve-bar`. Leave **Privilege Separation** checked. Copy the **secret**: Proxmox shows it only once.
-3. **Datacenter → Permissions → Add → User Permission**: path `/`, user `monitor@pve`, role **PVEAuditor**, Propagate checked.
-4. **Datacenter → Permissions → Add → API Token Permission**: path `/`, token `monitor@pve!pve-bar`, role **PVEAuditor**, Propagate checked.
+- 🖥️ **desktop**: the machine with GNOME, as your own user (never with `sudo`);
+- 🗄️ **Proxmox host**: a root shell on the server (SSH, or **Node → Shell** in the web UI).
 
-Both are needed: a token with Privilege Separation gets only the privileges that both it and its user have, so a role given to the token alone grants nothing.
+The examples use `pve.lan` for the Proxmox host and `home` as the name pve-bar gives it; use your own address and any short name.
 
-The same from the host shell:
+### 1. Build and install
 
-```bash
-pveum user add monitor@pve --comment "pve-bar (read-only)"
-pveum user token add monitor@pve pve-bar --privsep 1    # prints the secret once
-pveum acl modify / --users monitor@pve --tokens 'monitor@pve!pve-bar' --roles PVEAuditor
-```
-
-`PVEAuditor` can only read. `pvectl doctor` warns if a token can change anything, and prints this command when it cannot read.
-
-## 2. Install
+🖥️ **desktop**
 
 ```bash
+sudo apt install build-essential libglib2.0-bin git    # once
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # once, if you have no Rust
+
+git clone https://github.com/pauloeduardods/pve-bar.git
+cd pve-bar
 ./install.sh
 ```
 
-That builds pved and pvectl, installs them with the extension for your user, and enables the extension. Nothing needs root or sudo. Run it again to upgrade.
+That builds pved and pvectl, installs them with the extension for your user, and enables the extension. Nothing needs root. Run `git pull && ./install.sh` again to upgrade.
 
-GNOME Shell keeps the extension code it loaded, so a new version shows up after the shell reloads:
+GNOME Shell keeps the extension code it loaded, so it appears (or a new version shows up) after the shell reloads:
 
 - **X11:** press **Alt+F2**, type `r`, Enter. Your windows stay open.
 - **Wayland:** log out and back in.
 
-What goes where (all recorded in a manifest; `./install.sh --uninstall` removes exactly those files):
+The bar shows `pve off` or no servers until the next steps.
 
-| File | Destination |
-|---|---|
-| pved | `~/.local/libexec/pve-bar/pved` |
-| pvectl | `~/.local/bin/pvectl` |
-| systemd user unit | `~/.config/systemd/user/pved.service` |
-| D-Bus activation | `~/.local/share/dbus-1/services/io.github.pauloeduardods.PveBar1.service` |
-| extension | `~/.local/share/gnome-shell/extensions/pve-bar@paulo/` |
+### 2. Create a read-only API token
 
-Your servers (`~/.config/pve-bar/pved.conf`) and their tokens (GNOME Keyring) are kept on uninstall.
-
-## 3. Add your servers
+🗄️ **Proxmox host**
 
 ```bash
-pvectl setup home     # any short name: a-z, 0-9 and -
-pvectl setup lab      # as many as you like
+pveum user add monitor@pve --comment "pve-bar (read-only)"
+pveum user token add monitor@pve pve-bar --privsep 1     # prints the secret once: copy it
+pveum acl modify / --users monitor@pve --tokens 'monitor@pve!pve-bar' --roles PVEAuditor
 ```
 
-`setup` asks for the URL, the token id and the secret, and then:
+The role goes to **both** the user and the token: a token with privilege separation only gets what both have, so a role given to the token alone grants nothing. `PVEAuditor` can only read, and `monitor@pve` has no password, so nobody can log in with it.
 
-- **Certificate:** Proxmox uses a self-signed certificate, so pve-bar pins its SHA-256 fingerprint. `setup` shows the fingerprint the server presents and asks you to compare it with **Node → System → Certificates** (or `openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256` on the host). A server with a public certificate (Let's Encrypt) needs no pinning.
-- **Test:** it tries the token before saving anything and warns if the token can do more than read.
-- **Storage:** the secret goes to the GNOME Keyring, never to a file. The config file holds only the URL, token id, fingerprint and agent URL.
-- **Reload:** it tells pved to re-read the config.
+The same in the web UI, under **Datacenter → Permissions**:
 
-Run `pvectl setup NAME` again to change a server (Enter keeps each value), and `pvectl remove NAME` to forget it and its secrets.
+1. **Users → Add**: user `monitor`, realm `Proxmox VE authentication server` (`pve`).
+2. **API Tokens → Add**: user `monitor@pve`, token id `pve-bar`, **Privilege Separation** checked. Copy the secret: Proxmox shows it only once.
+3. **Add → User Permission**: path `/`, user `monitor@pve`, role **PVEAuditor**.
+4. **Add → API Token Permission**: path `/`, token `monitor@pve!pve-bar`, role **PVEAuditor**.
 
-## 4. Temperature (optional)
+While you are on the host, note its certificate fingerprint for the next step:
 
-The Proxmox API has no temperatures. To show them, install pve-temp-agent on each host: it is a 500 KB static binary with no dependencies, sandboxed by systemd, that serves `/sys/class/hwmon` readings behind its own token. Follow [deploy/pve-temp-agent/README.md](deploy/pve-temp-agent/README.md), then run `pvectl setup NAME` again and give it the agent URL and token.
+```bash
+openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256
+```
 
-## The menu
+### 3. Add the server to pve-bar
 
-Click the bar to open the menu. Each server is a collapsed line with a summary, coloured by its worst reading: `home · 23% · 61% · 54° · 23/30` is CPU, RAM, the hottest temperature and running/total guests (a server that is down shows its state and why). Click it to see its node with CPU, RAM and temperature graphed inline over the last 15 minutes and the disk, or one compact line per node of a cluster, and a **Guests** list. Click a guest to see its details in place of the list: status, uptime, CPU and RAM over the last hour, network in and out, the disk inside the VM, and **Pin to bar**, which adds a segment for that guest to the bar. **← Guests** goes back.
+🖥️ **desktop**
 
-pved fetches a guest's details only while its view is open (or a bar segment shows them), and the menu is not updated while it is closed.
+```bash
+pvectl setup home
+```
 
-The disk inside a VM (`fs`) comes from the QEMU guest agent, so the VM needs the agent installed and enabled. On Proxmox VE 8 reading it also needs the `VM.Monitor` privilege, which `PVEAuditor` does not have. pve-bar does **not** recommend granting it: `VM.Monitor` allows QEMU monitor commands, and `pvectl doctor` flags it as more than read access. With the recommended read-only token the disk inside VMs is simply absent, and the guest view says what it would need. Containers have no such reading.
+```
+Adding server home.
+Proxmox URL (https://host:8006): https://pve.lan:8006
+API token id (user@realm!token) [monitor@pve!pve-bar]:
+
+The server presents a certificate that is not from a public CA (Proxmox's
+own self-signed one, usually). Its SHA-256 fingerprint is:
+
+  AB:CD:EF:…:12
+
+Compare it with Proxmox → your node → System → Certificates → pve-ssl.pem
+(or on the host: openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256).
+Do they match? (y/N): y
+API token secret (the UUID shown once when the token was created):
+Token works: 1 node(s), 12 guest(s).
+
+Optional: pve-temp-agent on this host shows its temperature (see deploy/pve-temp-agent).
+Temperature agent URL (http://host:9101, '-' for none): -
+
+Saved home to /home/you/.config/pve-bar/pved.conf and its token(s) to the GNOME Keyring.
+Check everything with: pvectl doctor
+```
+
+- **Certificate:** Proxmox uses a self-signed certificate, so pve-bar pins its fingerprint and refuses any other. Answer `y` only if it matches the one `openssl` printed in step 2.
+- **Secret:** it goes to the GNOME Keyring, never to a file. `~/.config/pve-bar/pved.conf` holds only the URL, token id, fingerprint and agent URL.
+- **Test:** the token is tried before anything is saved, with a warning if it can do more than read.
+
+Leave the temperature agent empty (`-`) for now; step 5 adds it. pved picks up the change at once.
+
+### 4. Check
+
+🖥️ **desktop**
+
+```bash
+pvectl doctor
+```
+
+```
+[ ok ] config                 /home/you/.config/pve-bar/pved.conf: home
+[ ok ] home: token            monitor@pve!pve-bar found in the GNOME Keyring
+[ ok ] home: api              https://pve.lan:8006 answers, Proxmox VE 9.2.5 (pinned certificate)
+[ ok ] home: privileges       read-only (Audit privileges only)
+[ ok ] home: temperature      no agent configured (optional)
+[ ok ] pved                   running, version 0.1.0
+[ ok ] pved: home             ok
+[ ok ] extension              installed (gnome-extensions info pve-bar@paulo)
+
+Nothing to fix.
+```
+
+When a line fails, `doctor` prints what to run. The bar now shows the server; repeat steps 2 to 4 for each other server (`pvectl setup lab`, …).
+
+### 5. Temperature (optional)
+
+The Proxmox API has no temperatures, so a small agent on the host serves them: a static binary with no dependencies that reads `/sys/class/hwmon` and answers only requests with its own token. It runs as a throwaway user with no capabilities and a read-only view of the system, and uses under 1 MB of RAM.
+
+🖥️ **desktop**: build it (static, so it runs on the host's Debian) and copy it over:
+
+```bash
+rustup target add x86_64-unknown-linux-musl            # once
+cargo build --release --target x86_64-unknown-linux-musl -p pve-temp-agent
+
+scp target/x86_64-unknown-linux-musl/release/pve-temp-agent \
+    deploy/pve-temp-agent/install-agent.sh \
+    deploy/pve-temp-agent/pve-temp-agent.service root@pve.lan:/root/
+```
+
+🗄️ **Proxmox host**: install it:
+
+```bash
+/root/install-agent.sh /root/pve-temp-agent
+```
+
+It starts the service on port 9101 and prints a **token** (only for reading temperatures; it is not a Proxmox credential).
+
+🗄️ **Proxmox host**: let only your network reach it. The agent speaks plain HTTP, so keep it to the LAN. `systemctl edit pve-temp-agent` and paste, with the host's own LAN address and your desktops' network:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/pve-temp-agent --listen 192.168.1.10:9101
+IPAddressDeny=any
+IPAddressAllow=192.168.1.0/24
+```
+
+```bash
+systemctl restart pve-temp-agent
+```
+
+`--listen` keeps the port off the host's other interfaces (VM bridges, VPNs), and `IPAddressAllow` makes the kernel drop anything from outside that network, even with the firewall off. Use the narrowest range that covers your desktops; if your VMs share it, they can reach the agent too. A matching Proxmox firewall rule adds a third layer: see [deploy/pve-temp-agent](deploy/pve-temp-agent/README.md#3-open-port-9101-to-your-desktop-only).
+
+🖥️ **desktop**: check, then give pve-bar the URL and token:
+
+```bash
+curl -H "Authorization: Bearer <token>" http://pve.lan:9101/temps   # JSON with the sensors
+pvectl setup home      # Enter keeps the URL, token and certificate; then the agent URL and token
+pvectl doctor          # home: temperature  http://pve.lan:9101: node pve at 40°C (18 sensors)
+```
+
+To upgrade the agent, copy a new binary and run `install-agent.sh` again (the token is kept). `install-agent.sh --uninstall` removes it.
 
 ## Customizing the bar
 
-The bar is a list of segments stored as JSON in the `panel-layout` setting. Each segment reads one target (the selected node, a given node, a guest, or a whole server), shows one or more readings through a template, and can draw a graph of the last 5, 15, 30 or 60 minutes:
+Open the menu → **Settings** (or `gnome-extensions prefs pve-bar@paulo`). The **Layout** page decides what the bar shows, with a preview drawn by the same code, from pved's live values:
 
-```
- [▣ 23% ╱╲╱] [▤ 61% ▁▃▅] [♨ 54°] [▭ web · 6% · 45%] [▤ home 2/3 · 23%]
-```
+![Settings, Layout page: a live preview of the bar and the list of segments](docs/screenshots/settings-layout.png)
+
+The bar is a list of segments. Each reads one target (the selected node, a given node, a guest, or a whole server), shows one or more readings through a template, and can draw a graph:
 
 - **Readings**: node `cpu`, `mem`, `mem-used`, `mem-total`, `disk`, `temp`, `status`, `name`; guest `cpu`, `mem`, `name`, `status`, `netin`, `netout`, `fs` (disk inside the VM, see [The menu](#the-menu)); server `running`, `guests`, `state`, `name`, `cpu`, `mem`.
-- **Templates**: `{cpu}% · {temp}°`, `{cpu:1}` for one decimal, `{{` and `}}` for braces. A mistake shows `--` instead of breaking the bar; a target that no longer exists shows `--`.
-- **Graphs**: line, area or bars, 30, 45 or 70 px wide, in the warm/hot colors of their thresholds or one fixed color. History comes from pved (one call when the extension connects, then every update is appended), so graphs cost no polling.
-- **Presets**: Minimal, Default, Graphs and Cluster (one segment per server).
-- Thresholds: `cpu-*`, `mem-*`, `disk-*`, `temp-*` and `fs-*` (`-warm` and `-hot`).
+- **Templates**: `{cpu}% · {temp}°`, `{cpu:1}` for one decimal, `{{` and `}}` for braces. A mistake shows `--` instead of breaking the bar, and so does a target that no longer exists.
+- **Graphs**: line, area or bars over the last 5, 15, 30 or 60 minutes, 30, 45 or 70 px wide, in the warm/hot colors of their thresholds or one fixed color. History comes from pved, so graphs cost no extra polling.
+- **Segments**: move, add and remove them; merge a reading into the next segment that reads the same target, or split it out. Targets are picked from the servers, nodes and guests pved lists.
+- **Presets**: Minimal, Default, Graphs and Cluster (one segment per server), with Undo; import and export the layout as a JSON file.
 
-Edit it in Settings (Extensions, pve-bar): the **Layout** page lists the segments (move, add, remove; merge a reading into the next segment that reads the same target, split it out), picks each segment's target from the servers, nodes and guests pved lists (or takes typed names while pved is not running), and has the template, icon and graph controls, the presets with Undo, and import/export of the layout as a JSON file. A preview at the top draws the bar with the same code, from pved's live values and history or sample values. **Thresholds** holds the warm/hot limits and colors, **General** the selected server and node and the position in the top bar.
+**Thresholds** holds the warm/hot limits and colors (`cpu`, `mem`, `disk`, `temp`, `fs`), shared by the bar, its graphs and the menu. **General** has the selected server and node and the position in the top bar. Details are in [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md).
 
-On the first start after an upgrade, the layout is built once from the older `server`, `node` and `show-icons` settings, so the bar looks the same. Details are in [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md). To look at the bar without GNOME Shell: `gjs -m tools/render-bar.js bar.png`; the menu: `gjs -m tools/render-menu.js menu.png`.
+## The menu
+
+Each server is a line with a summary, colored by its worst reading: `home · 1% · 81% · 40° · 4/12` is CPU, RAM, the hottest temperature and running/total guests (a server that is down shows its state and why). Click it to see its node with CPU, RAM and temperature graphed over the last 15 minutes and the disk, or one compact line per node of a cluster, and the **Guests** list.
+
+Click a guest for its details: status, uptime, CPU and RAM over the last hour, network in and out, the disk inside the VM, and **Pin to bar**, which adds a segment for it to the bar. **← Guests** goes back. pved fetches a guest's details only while its view is open (or a bar segment shows them), and the menu is not updated while it is closed.
+
+The disk inside a VM (`fs`) comes from the QEMU guest agent, so the VM needs the agent installed and enabled. On Proxmox VE 8, reading it also needs the `VM.Monitor` privilege, which `PVEAuditor` does not have. pve-bar does **not** recommend granting it: it allows QEMU monitor commands, and `pvectl doctor` flags it as more than read access. With the read-only token the disk inside VMs is simply absent, and the guest view says what it would need.
 
 ## Alerts
 
-pve-bar sends a GNOME notification (source "pve-bar") when something needs attention. Settings: Extensions, pve-bar, Alerts, which also has a **Test notification** button. Each alert names the server and the node or guest, and fires once per episode.
+pve-bar sends a GNOME notification when something needs attention. Settings → **Alerts**, which also has a **Test notification** button. Each alert names the server and the node or guest, and fires once per episode.
 
 | Alert | Default | Fires when | Ends when |
 |---|---|---|---|
@@ -134,27 +235,63 @@ Nothing fires for the state found when pve-bar connects, and a missing reading (
 
 ## Command line
 
+🖥️ **desktop**
+
 ```bash
 pvectl status            # every server: nodes and guests
 pvectl status home       # one server
 pvectl status --json     # machine-readable
 pvectl status --watch    # redraw every 10 s, with graphs of the last 5 minutes
 pvectl doctor            # check config, keyring, TLS, token, privileges, agent, pved, extension
+pvectl setup NAME        # add a server, or change one (Enter keeps each value)
+pvectl remove NAME       # forget a server and its secrets
 ```
 
-`status` and `doctor` talk to Proxmox directly with the same config and keyring, so they work without pved. `status --watch` draws each node's CPU, RAM and temperature and each running guest's CPU as text sparklines (`▁▃▅█`); when pved is already running, its history fills them at once. `doctor` only reads; when something is wrong it prints what to run. It exits with 1 when something needs attention.
+`status` and `doctor` talk to Proxmox directly with the same config and keyring, so they work without pved. `doctor` only reads; when something is wrong it prints what to run, and it exits with 1.
 
+## Security
+
+- The API token has only `PVEAuditor`: it can read the cluster's state and configuration, and change nothing. Do not keep passwords in VM notes, since the token can read them.
+- Secrets live in the GNOME Keyring; the config file (`0600`) has none.
+- The certificate is pinned: a different one, from an attacker or a renewed certificate, is refused until you run `pvectl setup` again and confirm the new fingerprint.
+- Nothing runs as root on the desktop. The extension makes no network calls, and pved is reachable only on your session bus.
+- The temperature agent's port should be reachable only from your LAN (step 5). Never forward 8006 or 9101 to the internet; use a VPN for remote access.
+
+## Footprint
+
+Measured on a real Proxmox VE 9.2 host with one node and 12 guests ([details](docs/FOOTPRINT.md)):
+
+| | CPU (one core) | RAM |
+|---|---|---|
+| pved, desktop | 0.017 % | 6.3 MB |
+| pve-temp-agent, host | 0.066 % | 0.9 MB |
+| Network | 6 requests a minute, 4.4 KB each | |
+
+## Uninstall
+
+🖥️ **desktop**
+
+```bash
+./install.sh --uninstall
 ```
-[ ok ] config                 /home/you/.config/pve-bar/pved.conf: home, lab
-[ ok ] home: token            monitor@pve!pve-bar found in the GNOME Keyring
-[ ok ] home: api              https://pve.lan:8006 answers, Proxmox VE 9.0.3 (pinned certificate)
-[ ok ] home: privileges       read-only (Audit privileges only)
-[ ok ] home: temperature      http://pve.lan:9101: node pve at 54°C (12 sensors)
-[ ok ] pved                   running, version 0.1.0
-[ ok ] pved: home             ok
-[ ok ] extension              installed (gnome-extensions info pve-bar@paulo)
 
-Nothing to fix.
+It removes exactly the files it recorded in its manifest:
+
+| File | Destination |
+|---|---|
+| pved | `~/.local/libexec/pve-bar/pved` |
+| pvectl | `~/.local/bin/pvectl` |
+| systemd user unit | `~/.config/systemd/user/pved.service` |
+| D-Bus activation | `~/.local/share/dbus-1/services/io.github.pauloeduardods.PveBar1.service` |
+| extension | `~/.local/share/gnome-shell/extensions/pve-bar@paulo/` |
+
+Your servers (`~/.config/pve-bar/pved.conf`) and tokens (GNOME Keyring) are kept; `pvectl remove NAME` first forgets them.
+
+🗄️ **Proxmox host**
+
+```bash
+/root/install-agent.sh --uninstall           # if you installed the temperature agent
+pveum user delete monitor@pve                # removes the user, its token and permissions
 ```
 
 ## Development
@@ -170,7 +307,11 @@ npm test          # extension and installer tests (node, fake D-Bus, no GNOME ne
 npm run check     # syntax check of every module
 
 # pved with two synthetic servers (home: 30 guests, lab: 6), no Proxmox needed:
-~/.local/libexec/pve-bar/pved --fake     # or: systemctl --user edit pved and add --fake
+~/.local/libexec/pve-bar/pved --fake
+
+# look at the bar or the menu without GNOME Shell:
+gjs -m tools/render-bar.js bar.png
+gjs -m tools/render-menu.js menu.png
 
 # logs:
 journalctl --user -f -u pved

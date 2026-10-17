@@ -41,6 +41,42 @@ The hot path in pure code (`cargo bench -p pve-core`, same machine):
 | snapshot build (1 node, 30 guests) | 15.9 µs |
 | diff of one cycle of changes | 1.4 µs |
 
+## A real Proxmox host
+
+On 2026-10-17, the installed build against a real Proxmox VE 9.2.5 host (one
+node, 12 guests, the temperature agent with 18 sensors), 120 s each:
+
+| What | Result |
+|---|---|
+| pved CPU (`tools/footprint.sh live`) | 0.02 s, 0.017 % of one core |
+| pved resident memory | 6.3 MB, flat |
+| `Updated` signals to the shell | 12 (0.1/s) |
+| Requests to `pveproxy` (its access log) | 6 a minute, 4.4 KB each |
+| pve-temp-agent CPU (systemd `CPUUsageNSec`) | 0.066 % of one core, about 6 ms per reading |
+| pve-temp-agent memory (systemd `MemoryCurrent`) | 0.9 MB |
+
+The agent's time is almost all the kernel reading sensors (some drivers, such
+as NVMe's, send the drive a command per read). `pveproxy` closes an idle
+connection after about 5 s, so at a 10 s interval each poll opens a new TLS
+connection: about a millisecond of the host's CPU, not worth polling faster
+to keep the connection open. `pveproxy`'s total CPU over the same window also
+counts every other API client (the web UI, monitoring tools), so it is not
+pve-bar's share.
+
+On the host, as root:
+
+```bash
+S=120
+cpu() { systemctl show -p CPUUsageNSec --value "$1"; }
+p0=$(cpu pveproxy); a0=$(cpu pve-temp-agent); l0=$(wc -l < /var/log/pveproxy/access.log)
+sleep $S
+p1=$(cpu pveproxy); a1=$(cpu pve-temp-agent)
+tail -n +$((l0+1)) /var/log/pveproxy/access.log | grep -F 'monitor@pve!pve-bar' |
+  awk -v s=$S '{n++; b+=$NF} END {printf "pve-bar requests: %d (%.1f/min), %.1f KB each\n", n, n*60/s, n ? b/n/1024 : 0}'
+awk -v p=$((p1-p0)) -v a=$((a1-a0)) -v s=$S 'BEGIN {printf "pveproxy CPU (everything): %.3f%%\npve-temp-agent CPU: %.4f%%\n", p/1e7/s, a/1e7/s}'
+systemctl show -p MemoryCurrent --value pve-temp-agent | awk '{printf "pve-temp-agent RAM: %.1f MB\n", $1/1048576}'
+```
+
 ## How it is measured
 
 - `bench` runs a copy of pved as you on a **private** dbus-daemon with its
@@ -75,5 +111,5 @@ tools/footprint.sh live 120                        # the installed pved and gnom
 
 - **The extension's cost in gnome-shell** with 8 segments and graphs: that
   is lanes B and E's part of the budget, measured once they land.
-- **A real Proxmox host.** The mock answers in microseconds; a real
-  `pveproxy` takes milliseconds, which changes wall time, not pved's CPU.
+- **pve-bar's exact share of `pveproxy`'s CPU**: it needs the measurement
+  above with pved stopped, to subtract every other API client.
